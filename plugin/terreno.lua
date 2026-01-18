@@ -7,6 +7,9 @@ local subcommands = {
   buffer = function()
     require("terreno").send_buffer()
   end,
+  workspace = function(query)
+    require("terreno").send_workspace(query)
+  end,
 }
 
 vim.api.nvim_create_user_command("Terreno", function(opts)
@@ -14,7 +17,7 @@ vim.api.nvim_create_user_command("Terreno", function(opts)
   local subcmd = args[1]
 
   if not subcmd then
-    vim.notify("Terreno: subcommand required (buffer)", vim.log.levels.WARN)
+    vim.notify("Terreno: subcommand required (buffer, workspace)", vim.log.levels.WARN)
     return
   end
 

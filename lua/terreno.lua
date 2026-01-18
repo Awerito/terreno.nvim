@@ -1,4 +1,4 @@
-local parser = require("terreno.parser")
+local lsp = require("terreno.lsp")
 
 local M = {}
 
@@ -42,7 +42,7 @@ M.send_graph = function(graph)
   })
 end
 
---- Send current buffer to the server
+--- Send current buffer symbols to the server (via LSP)
 M.send_buffer = function()
   local bufnr = vim.api.nvim_get_current_buf()
   local filename = vim.fn.expand("%:t")
@@ -51,16 +51,32 @@ M.send_buffer = function()
     filename = "[No Name]"
   end
 
-  local functions = parser.get_functions(bufnr)
+  lsp.get_document_symbols(bufnr, function(symbols)
+    if #symbols == 0 then
+      vim.notify("Terreno: no symbols found (is LSP attached?)", vim.log.levels.WARN)
+      return
+    end
 
-  if #functions == 0 then
-    vim.notify("Terreno: no functions found in buffer", vim.log.levels.WARN)
-    return
-  end
+    local graph = lsp.symbols_to_graph(symbols, filename)
+    vim.notify("Terreno: found " .. #symbols .. " symbols", vim.log.levels.INFO)
+    M.send_graph(graph)
+  end)
+end
 
-  local graph = parser.functions_to_graph(functions, filename)
-  vim.notify("Terreno: found " .. #functions .. " functions", vim.log.levels.INFO)
-  M.send_graph(graph)
+--- Send workspace symbols to the server (via LSP)
+---@param query string|nil Search query (empty for all)
+M.send_workspace = function(query)
+  lsp.get_workspace_symbols(query or "", function(symbols)
+    if #symbols == 0 then
+      vim.notify("Terreno: no workspace symbols found", vim.log.levels.WARN)
+      return
+    end
+
+    local cwd = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
+    local graph = lsp.symbols_to_graph(symbols, cwd)
+    vim.notify("Terreno: found " .. #symbols .. " workspace symbols", vim.log.levels.INFO)
+    M.send_graph(graph)
+  end)
 end
 
 return M
