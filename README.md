@@ -33,15 +33,15 @@ Click on `Use this template`
 ```
 .
 ├── lua
-│   ├── plugin_name
+│   ├── terreno
 │   │   └── module.lua
-│   └── plugin_name.lua
+│   └── terreno.lua
 ├── Makefile
 ├── plugin
-│   └── plugin_name.lua
+│   └── terreno.lua
 ├── README.md
 ├── tests
 │   ├── minimal_init.lua
-│   └── plugin_name
-│       └── plugin_name_spec.lua
+│   └── terreno
+│       └── terreno_spec.lua
 ```

@@ -1,1 +1,6 @@
 vendor/plenary.nvim
+
+# Node
+node_modules/
+dist/
+*.log
