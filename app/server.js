@@ -35,30 +35,9 @@ app.post("/api/graph", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// Demo graph to send on connection
-const demoGraph = {
-  nodes: [
-    { id: "1", type: "input", data: { label: "init.lua" }, position: { x: 250, y: 0 } },
-    { id: "2", data: { label: "require('terreno')" }, position: { x: 250, y: 100 } },
-    { id: "3", data: { label: "terreno.setup()" }, position: { x: 100, y: 200 } },
-    { id: "4", data: { label: "terreno.open()" }, position: { x: 400, y: 200 } },
-    { id: "5", type: "output", data: { label: "server.start()" }, position: { x: 250, y: 300 } },
-  ],
-  edges: [
-    { id: "e1-2", source: "1", target: "2" },
-    { id: "e2-3", source: "2", target: "3" },
-    { id: "e2-4", source: "2", target: "4" },
-    { id: "e3-5", source: "3", target: "5" },
-    { id: "e4-5", source: "4", target: "5" },
-  ],
-};
-
 // Socket.io connection
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
-
-  // Send demo graph on connection
-  socket.emit("graph:data", demoGraph);
 
   // Receive graph data from Neovim
   socket.on("graph:update", (data) => {

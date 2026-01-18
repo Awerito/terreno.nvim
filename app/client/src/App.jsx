@@ -11,11 +11,11 @@ import { io } from "socket.io-client";
 import "@xyflow/react/dist/style.css";
 import "./App.css";
 
-// Grafo dummy inicial
+// Initial node with instructions
 const defaultNodes = [
   {
     id: "waiting",
-    data: { label: "Waiting for data from Neovim..." },
+    data: { label: "Run :Terreno buffer in Neovim" },
     position: { x: 250, y: 150 },
   },
 ];

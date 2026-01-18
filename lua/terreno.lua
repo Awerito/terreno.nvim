@@ -1,8 +1,10 @@
+local parser = require("terreno.parser")
+
 local M = {}
 
 ---@class TerrenoConfig
----@field server_url string URL del servidor terreno
----@field port number Puerto del servidor
+---@field server_url string Terreno server URL
+---@field port number Server port
 local default_config = {
   server_url = "http://localhost",
   port = 3000,
@@ -16,7 +18,7 @@ M.setup = function(opts)
   M.config = vim.tbl_deep_extend("force", default_config, opts or {})
 end
 
---- Envía un grafo al servidor
+--- Send a graph to the server
 ---@param graph table { nodes: table[], edges: table[] }
 M.send_graph = function(graph)
   local url = M.config.server_url .. ":" .. M.config.port .. "/api/graph"
@@ -40,25 +42,25 @@ M.send_graph = function(graph)
   })
 end
 
---- Envía un grafo de prueba
-M.send_test = function()
-  local test_graph = {
-    nodes = {
-      { id = "1", type = "input", data = { label = "FROM NEOVIM!" }, position = { x = 250, y = 0 } },
-      { id = "2", data = { label = "init.lua" }, position = { x = 250, y = 100 } },
-      { id = "3", data = { label = "terreno.setup()" }, position = { x = 100, y = 200 } },
-      { id = "4", data = { label = "terreno.open()" }, position = { x = 400, y = 200 } },
-      { id = "5", type = "output", data = { label = "visualize!" }, position = { x = 250, y = 300 } },
-    },
-    edges = {
-      { id = "e1-2", source = "1", target = "2" },
-      { id = "e2-3", source = "2", target = "3" },
-      { id = "e2-4", source = "2", target = "4" },
-      { id = "e3-5", source = "3", target = "5" },
-      { id = "e4-5", source = "4", target = "5" },
-    },
-  }
-  M.send_graph(test_graph)
+--- Send current buffer to the server
+M.send_buffer = function()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filename = vim.fn.expand("%:t")
+
+  if filename == "" then
+    filename = "[No Name]"
+  end
+
+  local functions = parser.get_functions(bufnr)
+
+  if #functions == 0 then
+    vim.notify("Terreno: no functions found in buffer", vim.log.levels.WARN)
+    return
+  end
+
+  local graph = parser.functions_to_graph(functions, filename)
+  vim.notify("Terreno: found " .. #functions .. " functions", vim.log.levels.INFO)
+  M.send_graph(graph)
 end
 
 return M

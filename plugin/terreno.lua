@@ -4,8 +4,8 @@ end
 vim.g.loaded_terreno = true
 
 local subcommands = {
-  test = function()
-    require("terreno").send_test()
+  buffer = function()
+    require("terreno").send_buffer()
   end,
 }
 
@@ -14,7 +14,7 @@ vim.api.nvim_create_user_command("Terreno", function(opts)
   local subcmd = args[1]
 
   if not subcmd then
-    vim.notify("Terreno: subcommand required (test)", vim.log.levels.WARN)
+    vim.notify("Terreno: subcommand required (buffer)", vim.log.levels.WARN)
     return
   end
 
