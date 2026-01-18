@@ -90,6 +90,7 @@ M.flatten_symbols = function(symbols, bufnr, parent)
         kind = kind,
         kind_name = SymbolKindName[kind] or "Unknown",
         line = range.start.line + 1,
+        end_line = range["end"].line + 1,
         col = range.start.character + 1,
       })
 
@@ -144,6 +145,7 @@ M.get_workspace_symbols = function(query, callback)
           file = filename,
           filepath = filepath,
           line = range.start.line + 1,
+          end_line = range["end"].line + 1,
           col = range.start.character + 1,
         })
       end
@@ -374,6 +376,7 @@ M.symbols_to_graph = function(symbols, title, base_filepath)
           data = {
             label = sym.name,
             line = sym.line,
+            end_line = sym.end_line,
             file = file_name,
             filepath = sym.filepath or file_path,
           },

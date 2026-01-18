@@ -32,7 +32,13 @@ const SymbolNode = memo(({ data, id }) => {
         const filepath = data.filepath || data.path || data.file;
         socket.emit(
           "code:request",
-          { filepath, line: data.line, context: 5 },
+          {
+            filepath,
+            line: data.line,
+            end_line: data.end_line,
+            name: data.label,
+            context: 5,
+          },
           (response) => {
             setLoading(false);
             if (response.status === "ok") {

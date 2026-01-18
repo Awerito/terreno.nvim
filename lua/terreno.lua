@@ -65,6 +65,31 @@ M.navigate_to = function(filepath, line)
   end)
 end
 
+--- Send document symbols for a specific file (called by server for range detection)
+---@param filepath string Full path to file
+---@param request_id string Unique request ID for matching response
+M.send_document_symbols = function(filepath, request_id)
+  -- Open the file in a buffer (hidden) to get LSP symbols
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
+
+  lsp.get_document_symbols(bufnr, function(symbols)
+    local url = M.config.server_url .. ":" .. M.config.port .. "/api/symbols"
+    local data = vim.fn.json_encode({
+      request_id = request_id,
+      filepath = filepath,
+      symbols = symbols,
+    })
+
+    vim.fn.jobstart({
+      "curl", "-s", "-X", "POST",
+      "-H", "Content-Type: application/json",
+      "-d", data,
+      url,
+    })
+  end)
+end
+
 --- Get code snippet around a line
 ---@param filepath string Full path to file
 ---@param line number Center line
