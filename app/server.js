@@ -18,11 +18,20 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-// Serve static files from client build
+// Middleware
+app.use(express.json());
 app.use(express.static(join(__dirname, "client/dist")));
 
 // API endpoint for health check
 app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
+// API endpoint to receive graph from Neovim
+app.post("/api/graph", (req, res) => {
+  const graph = req.body;
+  console.log("Graph received from Neovim:", graph.nodes?.length, "nodes");
+  io.emit("graph:data", graph);
   res.json({ status: "ok" });
 });
 
