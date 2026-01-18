@@ -1,63 +1,68 @@
+import { useEffect, useState, useCallback } from "react";
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
+  useNodesState,
+  useEdgesState,
 } from "@xyflow/react";
+import { io } from "socket.io-client";
 import "@xyflow/react/dist/style.css";
 import "./App.css";
 
-// Grafo dummy - simula estructura de código
-const initialNodes = [
+// Grafo dummy inicial
+const defaultNodes = [
   {
-    id: "1",
-    type: "input",
-    data: { label: "main.lua" },
-    position: { x: 250, y: 0 },
-  },
-  {
-    id: "2",
-    data: { label: "terreno.setup()" },
-    position: { x: 100, y: 100 },
-  },
-  {
-    id: "3",
-    data: { label: "terreno.open()" },
-    position: { x: 400, y: 100 },
-  },
-  {
-    id: "4",
-    data: { label: "server.start()" },
-    position: { x: 100, y: 200 },
-  },
-  {
-    id: "5",
-    data: { label: "server.stop()" },
-    position: { x: 400, y: 200 },
-  },
-  {
-    id: "6",
-    type: "output",
-    data: { label: "socket.emit()" },
-    position: { x: 250, y: 300 },
+    id: "waiting",
+    data: { label: "Waiting for data from Neovim..." },
+    position: { x: 250, y: 150 },
   },
 ];
 
-const initialEdges = [
-  { id: "e1-2", source: "1", target: "2" },
-  { id: "e1-3", source: "1", target: "3" },
-  { id: "e2-4", source: "2", target: "4" },
-  { id: "e3-5", source: "3", target: "5" },
-  { id: "e4-6", source: "4", target: "6" },
-  { id: "e5-6", source: "5", target: "6" },
-];
+const defaultEdges = [];
+
+const socket = io("http://localhost:3000");
 
 function App() {
+  const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    socket.on("connect", () => {
+      console.log("Connected to server");
+      setConnected(true);
+    });
+
+    socket.on("disconnect", () => {
+      console.log("Disconnected from server");
+      setConnected(false);
+    });
+
+    socket.on("graph:data", (data) => {
+      console.log("Received graph data:", data);
+      if (data.nodes) setNodes(data.nodes);
+      if (data.edges) setEdges(data.edges);
+    });
+
+    return () => {
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.off("graph:data");
+    };
+  }, [setNodes, setEdges]);
+
   return (
     <div className="app">
+      <div className="status">
+        {connected ? "Connected" : "Disconnected"}
+      </div>
       <ReactFlow
-        nodes={initialNodes}
-        edges={initialEdges}
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         fitView
       >
         <Background />
