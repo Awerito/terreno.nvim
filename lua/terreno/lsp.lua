@@ -84,14 +84,17 @@ M.flatten_symbols = function(symbols, bufnr, parent)
 
     if name and range then
       local full_name = parent and (parent .. "." .. name) or name
+      -- Use selectionRange for the name position (for prepareCallHierarchy)
+      -- Fall back to range if selectionRange not available
+      local sel_range = symbol.selectionRange or range
 
       table.insert(result, {
         name = full_name,
         kind = kind,
         kind_name = SymbolKindName[kind] or "Unknown",
-        line = range.start.line + 1,
+        line = sel_range.start.line + 1,
         end_line = range["end"].line + 1,
-        col = range.start.character + 1,
+        col = sel_range.start.character + 1,
       })
 
       -- Recursively process children
@@ -299,30 +302,150 @@ end
 --- Build workspace-wide call graph
 ---@param query string Search query for workspace symbols
 ---@param callback function Callback with (graph: table)
--- Debug log to file
+-- Debug logging
+local DEBUG = true
+local DEBUG_FILE = "/tmp/terreno_debug.log"
+
 local function debug_log(msg)
-  local f = io.open("/tmp/terreno_debug.log", "a")
+  if not DEBUG then return end
+  local f = io.open(DEBUG_FILE, "a")
   if f then
     f:write(os.date("%H:%M:%S ") .. msg .. "\n")
     f:close()
   end
 end
 
-M.build_workspace_call_graph = function(query, callback)
-  -- Clear debug log
-  os.remove("/tmp/terreno_debug.log")
-  debug_log("Starting build_workspace_call_graph")
+local function debug_clear()
+  if not DEBUG then return end
+  local f = io.open(DEBUG_FILE, "w")
+  if f then
+    f:write("=== Terreno Debug Log ===\n")
+    f:close()
+  end
+end
 
+--- Get all project files (Python, JS, TS, Lua, etc.)
+local function get_project_files()
   local cwd = vim.fn.getcwd()
+  local extensions = { "py", "js", "ts", "jsx", "tsx", "lua", "go", "rs", "rb" }
+  local pattern = "*.{" .. table.concat(extensions, ",") .. "}"
 
-  M.get_workspace_symbols(query or "", function(symbols)
-    -- Filter to only functions and methods
-    local functions = {}
-    for _, sym in ipairs(symbols) do
-      if sym.kind == 6 or sym.kind == 12 then -- Method = 6, Function = 12
-        table.insert(functions, sym)
+  local files = vim.fn.globpath(cwd, "**/" .. pattern, false, true)
+  -- Filter out common non-source directories
+  local filtered = {}
+  for _, file in ipairs(files) do
+    if not file:match("/node_modules/")
+        and not file:match("/%.git/")
+        and not file:match("/env/")
+        and not file:match("/venv/")
+        and not file:match("/__pycache__/")
+        and not file:match("/%.venv/")
+        and not file:match("/dist/")
+        and not file:match("/build/") then
+      table.insert(filtered, file)
+    end
+  end
+  return filtered
+end
+
+--- Get all functions from LOADED buffers with LSP (files user has opened)
+---@param callback function Callback with (functions: table[])
+M.get_all_project_functions = function(callback)
+  local cwd = vim.fn.getcwd()
+  local all_functions = {}
+
+  -- Get all loaded buffers with LSP attached
+  local buffers = vim.api.nvim_list_bufs()
+  local valid_buffers = {}
+
+  for _, bufnr in ipairs(buffers) do
+    if vim.api.nvim_buf_is_loaded(bufnr) then
+      local filepath = vim.api.nvim_buf_get_name(bufnr)
+      -- Only include files in project and with LSP
+      if filepath:sub(1, #cwd) == cwd then
+        local clients = vim.lsp.get_clients({ bufnr = bufnr })
+        if #clients > 0 then
+          table.insert(valid_buffers, { bufnr = bufnr, filepath = filepath })
+        end
       end
     end
+  end
+
+  debug_log("found " .. #valid_buffers .. " loaded buffers with LSP")
+
+  if #valid_buffers == 0 then
+    vim.notify("Terreno: no files with LSP open. Open some files first or use :Terreno workspace <query>", vim.log.levels.WARN)
+    callback({})
+    return
+  end
+
+  local pending = #valid_buffers
+
+  for _, buf in ipairs(valid_buffers) do
+    local bufnr = buf.bufnr
+    local filepath = buf.filepath
+
+    local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
+
+    vim.lsp.buf_request(bufnr, "textDocument/documentSymbol", params, function(err, result)
+      if not err and result then
+        local symbols = M.flatten_symbols(result, bufnr)
+        for _, sym in ipairs(symbols) do
+          if sym.kind == 6 or sym.kind == 12 then -- Method = 6, Function = 12
+            local rel_path = filepath
+            if filepath:sub(1, #cwd) == cwd then
+              rel_path = filepath:sub(#cwd + 2)
+            end
+            table.insert(all_functions, {
+              name = sym.name,
+              kind = sym.kind,
+              kind_name = sym.kind_name,
+              file = vim.fn.fnamemodify(filepath, ":t"),
+              filepath = filepath,
+              path = rel_path,
+              line = sym.line,
+              end_line = sym.end_line,
+              col = sym.col,
+            })
+          end
+        end
+      end
+
+      pending = pending - 1
+      if pending == 0 then
+        debug_log("total functions found: " .. #all_functions)
+        callback(all_functions)
+      end
+    end)
+  end
+end
+
+M.build_workspace_call_graph = function(query, callback)
+  debug_clear()
+  debug_log("build_workspace_call_graph started, query: " .. (query or "nil"))
+  local cwd = vim.fn.getcwd()
+  debug_log("cwd: " .. cwd)
+
+  -- If no query, use documentSymbol on all project files
+  -- If query provided, use workspace/symbol
+  local get_functions = function(cb)
+    if not query or query == "" then
+      M.get_all_project_functions(cb)
+    else
+      M.get_workspace_symbols(query, function(symbols)
+        local functions = {}
+        for _, sym in ipairs(symbols) do
+          if sym.kind == 6 or sym.kind == 12 then
+            table.insert(functions, sym)
+          end
+        end
+        cb(functions)
+      end)
+    end
+  end
+
+  get_functions(function(functions)
+    debug_log("functions found: " .. #functions)
 
     if #functions == 0 then
       callback({ nodes = {}, edges = {} })
@@ -331,65 +454,46 @@ M.build_workspace_call_graph = function(query, callback)
 
     local nodes = {}
     local edges = {}
-    local node_map = {} -- id -> true (tracks existing nodes)
-    local queue = {} -- functions to process
-    local processed_ids = {} -- already processed
+    local node_ids = {} -- Map filepath:line -> true for quick lookup
 
-    -- Helper to add a node
-    local function add_node(func_data)
-      local id = func_data.filepath .. ":" .. func_data.line
-      if node_map[id] then
-        return id
+    -- First pass: create all nodes and build lookup
+    for i, func in ipairs(functions) do
+      local id = func.filepath .. ":" .. func.line
+      node_ids[id] = true
+      debug_log("node: " .. func.name .. " -> " .. id)
+
+      local rel_path = func.filepath
+      if func.filepath:sub(1, #cwd) == cwd then
+        rel_path = func.filepath:sub(#cwd + 2)
       end
 
-      local rel_path = func_data.filepath
-      if func_data.filepath:sub(1, #cwd) == cwd then
-        rel_path = func_data.filepath:sub(#cwd + 2)
-      end
-
-      node_map[id] = true
       table.insert(nodes, {
         id = id,
         data = {
-          label = func_data.name,
-          filepath = func_data.filepath,
-          file = vim.fn.fnamemodify(func_data.filepath, ":t"),
+          label = func.name,
+          filepath = func.filepath,
+          file = vim.fn.fnamemodify(func.filepath, ":t"),
           path = rel_path,
-          line = func_data.line,
-          end_line = func_data.end_line,
-          kind = func_data.kind_name or "Function",
+          line = func.line,
+          col = func.col,
+          end_line = func.end_line,
+          kind = func.kind_name or "Function",
+          expandable = true,
         },
-        position = { x = (#nodes % 10) * 200, y = math.floor(#nodes / 10) * 100 },
+        position = { x = (i % 5) * 250, y = math.floor(i / 5) * 120 },
       })
-      return id
     end
 
-    -- Add initial functions and queue them
+    debug_log("created " .. #nodes .. " nodes, starting edge discovery...")
+
+    -- Second pass: find edges between existing nodes
+    local pending = #functions
+    local edge_set = {} -- Avoid duplicate edges
+
+    vim.notify("Terreno: found " .. #nodes .. " functions, finding connections...", vim.log.levels.INFO)
+
     for _, func in ipairs(functions) do
-      add_node(func)
-      table.insert(queue, func)
-    end
-
-    vim.notify("Terreno: analyzing " .. #queue .. " functions (recursive)...", vim.log.levels.INFO)
-
-    -- Process queue recursively
-    local function process_next()
-      if #queue == 0 then
-        vim.notify("Terreno: found " .. #nodes .. " functions, " .. #edges .. " calls", vim.log.levels.INFO)
-        callback({ nodes = nodes, edges = edges })
-        return
-      end
-
-      local func = table.remove(queue, 1)
       local source_id = func.filepath .. ":" .. func.line
-
-      -- Skip if already processed
-      if processed_ids[source_id] then
-        vim.defer_fn(process_next, 1)
-        return
-      end
-      processed_ids[source_id] = true
-
       local bufnr = vim.fn.bufadd(func.filepath)
       vim.fn.bufload(bufnr)
 
@@ -398,76 +502,167 @@ M.build_workspace_call_graph = function(query, callback)
         position = { line = func.line - 1, character = (func.col or 5) - 1 },
       }
 
+      debug_log("prepareCallHierarchy for: " .. func.name .. " at " .. func.filepath .. ":" .. func.line)
+
       vim.lsp.buf_request(bufnr, "textDocument/prepareCallHierarchy", params, function(err, result)
-        if err or not result or #result == 0 then
-          debug_log(string.format("PrepareCallHierarchy FAILED for %s", func.name))
-          vim.defer_fn(process_next, 1)
-          return
+        if err then
+          debug_log("  ERROR: " .. vim.inspect(err))
         end
 
-        local item = result[1]
-        debug_log(string.format("PrepareCallHierarchy OK: %s", item.name))
+        if not err and result and #result > 0 then
+          local item = result[1]
+          debug_log("  prepareCallHierarchy OK: " .. item.name)
 
-        M.get_outgoing_calls(item, function(calls)
-          debug_log(string.format("OutgoingCalls for %s: %d calls", item.name, #calls))
+          M.get_outgoing_calls(item, bufnr, function(calls)
+            debug_log("  outgoingCalls returned: " .. #calls)
 
-          for _, call in ipairs(calls) do
-            local target_name = call.to.name
-            local target_uri = call.to.uri
-            local target_line = call.to.range and (call.to.range.start.line + 1) or 0
-            local target_col = call.to.range and (call.to.range.start.character + 1) or 5
-            local target_filepath = vim.uri_to_fname(target_uri)
-            local target_id = target_filepath .. ":" .. target_line
+            for _, call in ipairs(calls) do
+              local target_uri = call.to.uri
+              local target_line = call.to.range and (call.to.range.start.line + 1) or 0
+              local target_filepath = vim.uri_to_fname(target_uri)
+              local target_id = target_filepath .. ":" .. target_line
 
-            debug_log(string.format("Call: %s -> %s (%s:%d)", func.name, target_name, target_filepath, target_line))
+              debug_log("    call to: " .. call.to.name .. " -> " .. target_id)
+              debug_log("    in node_ids? " .. tostring(node_ids[target_id] ~= nil))
 
-            -- Only include calls to files in our project
-            if target_filepath:sub(1, #cwd) == cwd then
-              -- Add node if not exists
-              if not node_map[target_id] then
-                add_node({
-                  name = target_name,
-                  filepath = target_filepath,
-                  line = target_line,
-                  col = target_col,
-                  kind_name = "Function",
-                })
-                -- Queue for processing
-                table.insert(queue, {
-                  name = target_name,
-                  filepath = target_filepath,
-                  line = target_line,
-                  col = target_col,
-                })
-                debug_log(string.format("Added to queue: %s", target_name))
-              end
-
-              -- Add edge
-              if target_id ~= source_id then
-                table.insert(edges, {
-                  id = "e_" .. #edges,
-                  source = source_id,
-                  target = target_id,
-                  animated = true,
-                })
+              -- Only add edge if target is in our node set
+              if node_ids[target_id] and target_id ~= source_id then
+                local edge_key = source_id .. "->" .. target_id
+                if not edge_set[edge_key] then
+                  edge_set[edge_key] = true
+                  debug_log("    EDGE ADDED: " .. edge_key)
+                  table.insert(edges, {
+                    id = "e_" .. source_id .. "_" .. target_id,
+                    source = source_id,
+                    target = target_id,
+                  })
+                end
               end
             end
-          end
 
-          -- Progress update
-          local total_processed = 0
-          for _ in pairs(processed_ids) do total_processed = total_processed + 1 end
-          if total_processed % 10 == 0 then
-            vim.notify("Terreno: processed " .. total_processed .. ", queue: " .. #queue, vim.log.levels.INFO)
+            pending = pending - 1
+            debug_log("  pending: " .. pending)
+            if pending == 0 then
+              debug_log("DONE: " .. #nodes .. " nodes, " .. #edges .. " edges")
+              vim.notify("Terreno: " .. #nodes .. " functions, " .. #edges .. " connections", vim.log.levels.INFO)
+              callback({ nodes = nodes, edges = edges })
+            end
+          end)
+        else
+          debug_log("  prepareCallHierarchy EMPTY or nil")
+          pending = pending - 1
+          debug_log("  pending: " .. pending)
+          if pending == 0 then
+            debug_log("DONE: " .. #nodes .. " nodes, " .. #edges .. " edges")
+            vim.notify("Terreno: " .. #nodes .. " functions, " .. #edges .. " connections", vim.log.levels.INFO)
+            callback({ nodes = nodes, edges = edges })
           end
-
-          vim.defer_fn(process_next, 1)
-        end)
+        end
       end)
     end
-
-    process_next()
   end)
+end
+
+--- Expand a single node - get its outgoing calls
+---@param filepath string
+---@param line number
+---@param col number
+---@param request_id string
+M.expand_node = function(filepath, line, col, request_id)
+  debug_log("expand_node called: " .. filepath .. ":" .. line .. " col=" .. (col or "nil") .. " request_id=" .. request_id)
+  local cwd = vim.fn.getcwd()
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
+  debug_log("buffer loaded: " .. bufnr)
+
+  local params = {
+    textDocument = { uri = vim.uri_from_fname(filepath) },
+    position = { line = line - 1, character = (col or 5) - 1 },
+  }
+
+  -- Check LSP client
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  debug_log("LSP clients for buffer: " .. #clients)
+
+  vim.lsp.buf_request(bufnr, "textDocument/prepareCallHierarchy", params, function(err, result)
+    local new_nodes = {}
+    local new_edges = {}
+    local source_id = filepath .. ":" .. line
+
+    if err then
+      debug_log("prepareCallHierarchy error: " .. vim.inspect(err))
+    end
+    debug_log("prepareCallHierarchy result: " .. (result and #result or "nil"))
+
+    if err or not result or #result == 0 then
+      -- Send empty result
+      M.send_expand_result(request_id, new_nodes, new_edges)
+      return
+    end
+
+    local item = result[1]
+    M.get_outgoing_calls(item, function(calls)
+      for _, call in ipairs(calls) do
+        local target_name = call.to.name
+        local target_uri = call.to.uri
+        local target_line = call.to.range and (call.to.range.start.line + 1) or 0
+        local target_col = call.to.range and (call.to.range.start.character + 1) or 5
+        local target_filepath = vim.uri_to_fname(target_uri)
+        local target_id = target_filepath .. ":" .. target_line
+
+        -- Only include calls to files in our project
+        if target_filepath:sub(1, #cwd) == cwd then
+          local rel_path = target_filepath
+          if target_filepath:sub(1, #cwd) == cwd then
+            rel_path = target_filepath:sub(#cwd + 2)
+          end
+
+          table.insert(new_nodes, {
+            id = target_id,
+            data = {
+              label = target_name,
+              filepath = target_filepath,
+              file = vim.fn.fnamemodify(target_filepath, ":t"),
+              path = rel_path,
+              line = target_line,
+              col = target_col,
+              kind = "Function",
+              expandable = true,
+            },
+            position = { x = 0, y = 0 }, -- Frontend will position
+          })
+
+          if target_id ~= source_id then
+            table.insert(new_edges, {
+              id = "e_" .. source_id .. "_" .. target_id,
+              source = source_id,
+              target = target_id,
+            })
+          end
+        end
+      end
+
+      M.send_expand_result(request_id, new_nodes, new_edges)
+    end)
+  end)
+end
+
+--- Send expand result to server
+M.send_expand_result = function(request_id, nodes, edges)
+  debug_log("send_expand_result: " .. request_id .. " nodes=" .. #nodes .. " edges=" .. #edges)
+  local url = require("terreno").config.server_url .. ":" .. require("terreno").config.port .. "/api/expand-result"
+  local data = vim.fn.json_encode({
+    request_id = request_id,
+    nodes = nodes,
+    edges = edges,
+  })
+
+  vim.fn.jobstart({
+    "curl", "-s", "-X", "POST",
+    "-H", "Content-Type: application/json",
+    "-d", data,
+    url,
+  })
 end
 
 --- Convert symbols to graph format for React Flow

@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { fileURLToPath } from "url";
@@ -30,6 +31,7 @@ const symbolsCache = new Map();
 const pendingSymbolRequests = new Map();
 
 // Middleware
+app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static(join(__dirname, "client/dist")));
 
@@ -55,6 +57,51 @@ app.post("/api/graph", (req, res) => {
   // Add cwd to graph for resolving relative paths
   graph.cwd = neovimCwd;
   io.emit("graph:data", graph);
+  res.json({ status: "ok" });
+});
+
+// Pending expand requests
+const pendingExpandRequests = new Map();
+
+// API endpoint to request node expansion
+app.post("/api/expand", async (req, res) => {
+  const { filepath, line, col } = req.body;
+  console.log("Expand request:", { filepath, line, col });
+
+  const requestId = `expand_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  // Create promise for response
+  const expandPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingExpandRequests.delete(requestId);
+      reject(new Error("Timeout"));
+    }, 10000);
+    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
+  });
+
+  try {
+    // Ask Neovim to expand the node
+    await sendToNeovim(`require("terreno.lsp").expand_node("${filepath}", ${line}, ${col || 5}, "${requestId}")`);
+    const result = await expandPromise;
+    res.json({ status: "ok", ...result });
+  } catch (err) {
+    console.error("Expand error:", err.message);
+    res.json({ status: "ok", nodes: [], edges: [] });
+  }
+});
+
+// API endpoint to receive expand results from Neovim
+app.post("/api/expand-result", (req, res) => {
+  const { request_id, nodes, edges } = req.body;
+  console.log("Expand result:", request_id, nodes?.length, "nodes", edges?.length, "edges");
+
+  const pending = pendingExpandRequests.get(request_id);
+  if (pending) {
+    clearTimeout(pending.timeout);
+    pending.resolve({ nodes, edges });
+    pendingExpandRequests.delete(request_id);
+  }
+
   res.json({ status: "ok" });
 });
 
