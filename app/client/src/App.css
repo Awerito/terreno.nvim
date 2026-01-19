@@ -59,8 +59,6 @@
   border-radius: 8px;
   min-width: 280px;
   width: fit-content;
-  overflow-x: hidden;
-  overflow-y: visible;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   color: #e2e8f0;
@@ -248,6 +246,14 @@
   line-height: 1.4;
   width: max-content;
   min-width: 100%;
+}
+
+.symbol-code-preview .linenumber {
+  background: transparent !important;
+}
+
+.symbol-code-preview span[style*="background"] {
+  background: transparent !important;
 }
 
 .symbol-code-preview .code-line {

@@ -1,6 +1,59 @@
 import { memo, useState, useCallback, useMemo } from "react";
 import { Handle, Position } from "@xyflow/react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+
+// Custom theme based on oneDark without line backgrounds
+const customTheme = {
+  ...oneDark,
+  'pre[class*="language-"]': {
+    ...oneDark['pre[class*="language-"]'],
+    background: "#0f172a",
+  },
+  'code[class*="language-"]': {
+    ...oneDark['code[class*="language-"]'],
+    background: "transparent",
+  },
+};
 import { socket } from "../utils/socket";
+
+// Map file extensions to Prism language identifiers
+const getLanguage = (filepath) => {
+  if (!filepath) return "text";
+  const ext = filepath.split(".").pop()?.toLowerCase();
+  const langMap = {
+    js: "javascript",
+    jsx: "jsx",
+    ts: "typescript",
+    tsx: "tsx",
+    py: "python",
+    rb: "ruby",
+    rs: "rust",
+    go: "go",
+    java: "java",
+    c: "c",
+    cpp: "cpp",
+    h: "c",
+    hpp: "cpp",
+    cs: "csharp",
+    php: "php",
+    lua: "lua",
+    sh: "bash",
+    bash: "bash",
+    zsh: "bash",
+    json: "json",
+    yaml: "yaml",
+    yml: "yaml",
+    md: "markdown",
+    sql: "sql",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    vue: "vue",
+    svelte: "svelte",
+  };
+  return langMap[ext] || "text";
+};
 
 const KIND_ORDER = [
   "Class",
@@ -129,15 +182,28 @@ const FileNode = memo(({ data, id }) => {
           {loadingCode ? (
             <div className="code-loading">Loading...</div>
           ) : (
-            codeLines.map((line) => (
-              <div
-                key={line.num}
-                className={`code-line ${line.num === sym.line ? "highlight" : ""}`}
-              >
-                <span className="line-num">{line.num}</span>
-                <span className="line-text">{line.text || " "}</span>
-              </div>
-            ))
+            <SyntaxHighlighter
+              language={getLanguage(data.filepath)}
+              style={customTheme}
+              showLineNumbers
+              startingLineNumber={codeLines[0]?.num || 1}
+              lineNumberStyle={{ minWidth: "2.5em", paddingRight: "1em", color: "#475569", background: "none" }}
+              lineNumberContainerStyle={{ background: "none" }}
+              customStyle={{
+                margin: 0,
+                padding: "8px",
+                background: "#0f172a",
+                fontSize: "11px",
+                borderRadius: "4px",
+              }}
+              lineProps={() => ({
+                style: {
+                  display: "block",
+                },
+              })}
+            >
+              {codeLines.map((l) => l.text).join("\n")}
+            </SyntaxHighlighter>
           )}
         </div>
       )}
