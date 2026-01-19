@@ -83,13 +83,19 @@ M.flatten_symbols = function(symbols, bufnr, parent)
     local range = symbol.range or (symbol.location and symbol.location.range)
 
     if name and range then
+      -- Skip dunder methods (__init__, __enter__, etc.) - not useful for call graphs
+      if name:match("^__") and name:match("__$") then
+        goto continue
+      end
+
       local full_name = parent and (parent .. "." .. name) or name
       -- Use selectionRange for the name position (for prepareCallHierarchy)
       -- Fall back to range if selectionRange not available
       local sel_range = symbol.selectionRange or range
 
       table.insert(result, {
-        name = full_name,
+        name = name, -- Simple name for display
+        full_name = full_name, -- Full name for identification
         kind = kind,
         kind_name = SymbolKindName[kind] or "Unknown",
         line = sel_range.start.line + 1,
@@ -105,6 +111,8 @@ M.flatten_symbols = function(symbols, bufnr, parent)
         end
       end
     end
+
+    ::continue::
   end
 
   return result
@@ -372,55 +380,108 @@ local function get_project_files()
   return filtered
 end
 
---- Get all functions from LOADED buffers with LSP (files user has opened)
----@param callback function Callback with (functions: table[])
-M.get_all_project_functions = function(callback)
-  local cwd = vim.fn.getcwd()
-  local all_functions = {}
+--- Follow imports using LSP definition (language agnostic)
+---@param bufnr number Buffer number
+---@param cwd string Current working directory
+---@param callback function Callback with (filepaths: table)
+local function follow_imports_via_lsp(bufnr, cwd, callback)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, 100, false) -- First 100 lines
+  local found_files = {}
+  local seen = {}
+  local pending = 0
+  local started = false
 
-  -- Get all loaded buffers with LSP attached
-  local buffers = vim.api.nvim_list_bufs()
-  local valid_buffers = {}
-
-  for _, bufnr in ipairs(buffers) do
-    if vim.api.nvim_buf_is_loaded(bufnr) then
-      local filepath = vim.api.nvim_buf_get_name(bufnr)
-      -- Only include files in project and with LSP
-      if filepath:sub(1, #cwd) == cwd then
-        local clients = vim.lsp.get_clients({ bufnr = bufnr })
-        if #clients > 0 then
-          table.insert(valid_buffers, { bufnr = bufnr, filepath = filepath })
-        end
-      end
+  local function finish()
+    if started and pending == 0 then
+      callback(found_files)
     end
   end
 
-  debug_log("found " .. #valid_buffers .. " loaded buffers with LSP")
+  -- For each line in the import section, try to find definitions
+  for lnum, line in ipairs(lines) do
+    -- Skip empty lines and comments
+    if line:match("^%s*$") or line:match("^%s*#") or line:match("^%s*//") or line:match("^%s*%-%-") then
+      goto continue
+    end
 
-  if #valid_buffers == 0 then
-    vim.notify("Terreno: no files with LSP open. Open some files first or use :Terreno workspace <query>", vim.log.levels.WARN)
-    callback({})
-    return
+    -- Find identifiers on this line (words that could be imports)
+    for col, word in line:gmatch("()([%w_]+)") do
+      -- Skip common keywords
+      if word == "from" or word == "import" or word == "as" or word == "require"
+          or word == "use" or word == "const" or word == "let" or word == "var" then
+        goto next_word
+      end
+
+      pending = pending + 1
+      local params = {
+        textDocument = { uri = vim.uri_from_fname(vim.api.nvim_buf_get_name(bufnr)) },
+        position = { line = lnum - 1, character = col - 1 },
+      }
+
+      vim.lsp.buf_request(bufnr, "textDocument/definition", params, function(err, result)
+        pending = pending - 1
+
+        if not err and result then
+          -- Handle both single result and array
+          local defs = vim.islist(result) and result or { result }
+          for _, def in ipairs(defs) do
+            local uri = def.uri or def.targetUri
+            if uri then
+              local def_path = vim.uri_to_fname(uri)
+              -- Only include project files
+              if is_project_file(def_path, cwd) and not seen[def_path] then
+                seen[def_path] = true
+                table.insert(found_files, def_path)
+                debug_log("import resolved: " .. word .. " -> " .. def_path)
+              end
+            end
+          end
+        end
+
+        finish()
+      end)
+
+      ::next_word::
+    end
+
+    ::continue::
   end
 
-  local pending = #valid_buffers
+  started = true
+  if pending == 0 then
+    callback(found_files)
+  end
+end
 
-  for _, buf in ipairs(valid_buffers) do
-    local bufnr = buf.bufnr
-    local filepath = buf.filepath
+--- Get functions from a file via LSP documentSymbol
+---@param filepath string
+---@param cwd string
+---@param callback function
+local function get_file_functions(filepath, cwd, callback)
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
 
-    local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
+  vim.defer_fn(function()
+    local clients = vim.lsp.get_clients({ bufnr = bufnr })
+    if #clients == 0 then
+      callback({})
+      return
+    end
+
+    local params = { textDocument = { uri = vim.uri_from_fname(filepath) } }
 
     vim.lsp.buf_request(bufnr, "textDocument/documentSymbol", params, function(err, result)
+      local functions = {}
+
       if not err and result then
         local symbols = M.flatten_symbols(result, bufnr)
         for _, sym in ipairs(symbols) do
-          if sym.kind == 6 or sym.kind == 12 then -- Method = 6, Function = 12
+          if sym.kind == 6 or sym.kind == 12 then -- Method, Function
             local rel_path = filepath
             if filepath:sub(1, #cwd) == cwd then
               rel_path = filepath:sub(#cwd + 2)
             end
-            table.insert(all_functions, {
+            table.insert(functions, {
               name = sym.name,
               kind = sym.kind,
               kind_name = sym.kind_name,
@@ -435,13 +496,53 @@ M.get_all_project_functions = function(callback)
         end
       end
 
-      pending = pending - 1
-      if pending == 0 then
-        debug_log("total functions found: " .. #all_functions)
-        callback(all_functions)
-      end
+      callback(functions)
     end)
+  end, 50)
+end
+
+--- Get functions from CURRENT buffer AND imported files (language agnostic via LSP)
+---@param callback function Callback with (functions: table[])
+M.get_current_buffer_functions = function(callback)
+  local cwd = vim.fn.getcwd()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local filepath = vim.api.nvim_buf_get_name(bufnr)
+
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  if #clients == 0 then
+    vim.notify("Terreno: no LSP attached to current buffer", vim.log.levels.WARN)
+    callback({})
+    return
   end
+
+  debug_log("getting functions from current buffer + imports: " .. filepath)
+
+  -- First, follow imports to find related files
+  follow_imports_via_lsp(bufnr, cwd, function(imported_files)
+    debug_log("found " .. #imported_files .. " imported files via LSP")
+
+    local all_files = { filepath }
+    for _, f in ipairs(imported_files) do
+      table.insert(all_files, f)
+    end
+
+    local all_functions = {}
+    local pending = #all_files
+
+    for _, file in ipairs(all_files) do
+      get_file_functions(file, cwd, function(funcs)
+        for _, fn in ipairs(funcs) do
+          table.insert(all_functions, fn)
+        end
+
+        pending = pending - 1
+        if pending == 0 then
+          debug_log("total functions: " .. #all_functions)
+          callback(all_functions)
+        end
+      end)
+    end
+  end)
 end
 
 M.build_workspace_call_graph = function(query, callback)
@@ -450,11 +551,11 @@ M.build_workspace_call_graph = function(query, callback)
   local cwd = vim.fn.getcwd()
   debug_log("cwd: " .. cwd)
 
-  -- If no query, use documentSymbol on all project files
-  -- If query provided, use workspace/symbol
+  -- If no query, use current buffer only (on-demand expansion)
+  -- If query provided, use workspace/symbol to search
   local get_functions = function(cb)
     if not query or query == "" then
-      M.get_all_project_functions(cb)
+      M.get_current_buffer_functions(cb)
     else
       M.get_workspace_symbols(query, function(symbols)
         local functions = {}

@@ -16,8 +16,42 @@ import "./App.css";
 
 const socket = io("http://localhost:3000");
 
+// Grid layout grouped by file (for initial view with no edges)
+const getGridLayout = (nodes) => {
+  // Group nodes by file
+  const byFile = {};
+  nodes.forEach((node) => {
+    const file = node.data?.file || "unknown";
+    if (!byFile[file]) byFile[file] = [];
+    byFile[file].push(node);
+  });
+
+  const files = Object.keys(byFile).sort();
+  const layoutedNodes = [];
+
+  const colWidth = 280;
+  const rowHeight = 90;
+
+  files.forEach((file, colIndex) => {
+    const fileNodes = byFile[file];
+    fileNodes.forEach((node, rowIndex) => {
+      layoutedNodes.push({
+        ...node,
+        position: { x: colIndex * colWidth, y: rowIndex * rowHeight },
+      });
+    });
+  });
+
+  return layoutedNodes;
+};
+
 // Auto-layout using dagre (LR = left-right, like a call tree)
 const getLayoutedElements = (nodes, edges, direction = "LR") => {
+  // If no edges, use grid layout grouped by file
+  if (edges.length === 0) {
+    return { nodes: getGridLayout(nodes), edges };
+  }
+
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: direction, nodesep: 50, ranksep: 200 });
 
@@ -223,13 +257,52 @@ function App() {
     console.log("Expanding calls:", sourceId, newNodes.length, "nodes");
 
     setNodes((currentNodes) => {
+      // Find source node position
+      const sourceNode = currentNodes.find((n) => n.id === sourceId);
+      const sourceX = sourceNode?.position?.x || 0;
+      const sourceY = sourceNode?.position?.y || 0;
+
       const existingIds = new Set(currentNodes.map((n) => n.id));
       const uniqueNewNodes = newNodes.filter((n) => !existingIds.has(n.id));
 
-      const typedNewNodes = uniqueNewNodes.map((node) => ({
+      if (uniqueNewNodes.length === 0) return currentNodes;
+
+      // Find occupied Y ranges at the target X position (with some tolerance)
+      const targetX = sourceX + 300;
+      const nodeHeight = 90;
+      const occupiedRanges = currentNodes
+        .filter((n) => Math.abs(n.position.x - targetX) < 250)
+        .map((n) => ({ top: n.position.y, bottom: n.position.y + 70 }));
+
+      // Find a free Y position starting from sourceY
+      const findFreeY = (startY, count) => {
+        let y = startY;
+        const neededHeight = count * nodeHeight;
+
+        for (let attempts = 0; attempts < 50; attempts++) {
+          const proposedTop = y;
+          const proposedBottom = y + neededHeight;
+
+          const hasCollision = occupiedRanges.some(
+            (r) => !(proposedBottom < r.top || proposedTop > r.bottom)
+          );
+
+          if (!hasCollision) return y;
+          y += nodeHeight;
+        }
+        return y;
+      };
+
+      const startY = findFreeY(sourceY, uniqueNewNodes.length);
+
+      // Position new nodes to the right of source, stacked vertically
+      const typedNewNodes = uniqueNewNodes.map((node, index) => ({
         ...node,
         type: node.type || "symbol",
-        position: { x: 0, y: 0 },
+        position: {
+          x: targetX,
+          y: startY + index * nodeHeight,
+        },
         data: {
           ...node.data,
           onExpandCalls: (...args) => expandCallsRef.current?.(...args),
@@ -247,8 +320,7 @@ function App() {
       return [...currentEdges, ...uniqueNewEdges];
     });
 
-    // Trigger layout after state updates
-    setTimeout(() => setNeedsLayout(true), 50);
+    // No global re-layout - nodes are positioned relative to parent
   }, [setNodes, setEdges]);
 
   expandCallsRef.current = handleExpandCalls;
