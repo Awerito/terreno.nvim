@@ -6,6 +6,7 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./App.css";
@@ -38,6 +39,7 @@ const defaultEdges = [];
 function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(defaultEdges);
+  const { fitView } = useReactFlow();
 
   // Socket connection state
   const { connected, neovimConnected, cwd } = useSocket();
@@ -73,8 +75,11 @@ function App() {
 
       setNodes(layoutedNodes);
       setEdges(layoutedEdges);
+
+      // Auto-center after first load
+      setTimeout(() => fitView({ padding: 0.1 }), 50);
     },
-    [setNodes, setEdges, refs]
+    [setNodes, setEdges, refs, fitView]
   );
 
   // Subscribe to graph data events
