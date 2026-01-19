@@ -124,6 +124,8 @@ function App() {
         fitView
         minZoom={0.1}
         maxZoom={2}
+        noPanClassName="no-wheel-zoom"
+        noWheelClassName="no-wheel-zoom"
       >
         <Background />
         <Controls />

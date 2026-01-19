@@ -178,7 +178,7 @@ const FileNode = memo(({ data, id }) => {
       </div>
 
       {expandedSymbol === sym.name && (
-        <div className="symbol-code-preview">
+        <div className="symbol-code-preview" onWheel={(e) => e.stopPropagation()}>
           {loadingCode ? (
             <div className="code-loading">Loading...</div>
           ) : (
@@ -211,7 +211,7 @@ const FileNode = memo(({ data, id }) => {
   );
 
   return (
-    <div className={`file-node ${data.highlighted ? "highlighted" : ""}`}>
+    <div className={`file-node no-wheel-zoom ${data.highlighted ? "highlighted" : ""}`}>
       <Handle type="target" position={Position.Left} />
 
       <div className="file-header" onClick={handleToggle}>
@@ -245,7 +245,7 @@ const FileNode = memo(({ data, id }) => {
       <div className="file-path">{data.path}</div>
 
       {expanded && (
-        <div className="file-symbols">
+        <div className="file-symbols" onWheel={(e) => e.stopPropagation()}>
           {KIND_ORDER.map((kind) =>
             groupedSymbols[kind] ? (
               <div key={kind} className="symbol-group">

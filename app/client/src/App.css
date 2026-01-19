@@ -162,7 +162,6 @@
   padding: 0 8px 8px;
   max-height: 300px;
   overflow-y: auto;
-  overflow-x: hidden;
 }
 
 .symbol-group {
@@ -237,15 +236,12 @@
 .symbol-code-preview {
   background: #0f172a;
   border-radius: 4px;
-  margin: 4px 8px 8px 16px;
+  margin: 4px 0 8px 8px;
   max-height: 200px;
   overflow-y: auto;
-  overflow-x: visible;
   font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 10px;
   line-height: 1.4;
-  width: max-content;
-  min-width: 100%;
 }
 
 .symbol-code-preview .linenumber {
