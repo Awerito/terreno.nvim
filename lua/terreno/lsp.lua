@@ -862,6 +862,67 @@ M.expand_node = function(filepath, line, col, request_id)
   end)
 end
 
+--- Expand a file's imports - get what this file depends on
+---@param filepath string
+---@param request_id string
+M.expand_file_imports = function(filepath, request_id)
+  debug_log("expand_file_imports called: " .. filepath .. " request_id=" .. request_id)
+  local cwd = vim.fn.getcwd()
+
+  -- Load the file buffer
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
+
+  -- Wait for LSP to attach
+  vim.defer_fn(function()
+    local clients = vim.lsp.get_clients({ bufnr = bufnr })
+    if #clients == 0 then
+      debug_log("No LSP clients for buffer")
+      M.send_expand_result(request_id, {}, {})
+      return
+    end
+
+    -- Follow imports via LSP
+    follow_imports_via_lsp(bufnr, cwd, function(imported_files)
+      debug_log("expand_file_imports found " .. #imported_files .. " imports")
+
+      local nodes = {}
+      local pending = #imported_files
+
+      if pending == 0 then
+        M.send_expand_result(request_id, nodes, {})
+        return
+      end
+
+      for _, file in ipairs(imported_files) do
+        get_file_symbols(file, cwd, function(symbols)
+          local rel_path = file
+          if file:sub(1, #cwd) == cwd then
+            rel_path = file:sub(#cwd + 2)
+          end
+
+          table.insert(nodes, {
+            id = file,
+            type = "file",
+            data = {
+              filepath = file,
+              filename = vim.fn.fnamemodify(file, ":t"),
+              path = rel_path,
+              symbols = symbols,
+            },
+          })
+
+          pending = pending - 1
+          if pending == 0 then
+            debug_log("expand_file_imports done: " .. #nodes .. " nodes")
+            M.send_expand_result(request_id, nodes, {})
+          end
+        end)
+      end
+    end)
+  end, 100)
+end
+
 --- Send expand result to server
 M.send_expand_result = function(request_id, nodes, edges)
   debug_log("send_expand_result: " .. request_id .. " nodes=" .. #nodes .. " edges=" .. #edges)

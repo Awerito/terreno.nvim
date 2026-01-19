@@ -111,6 +111,10 @@ const getLayoutedElements = (nodes, edges, direction = "LR") => {
 // File node component (Nogic style) - shows file with its symbols
 const FileNode = memo(({ data, id }) => {
   const [expanded, setExpanded] = useState(true);
+  const [expandedSymbol, setExpandedSymbol] = useState(null);
+  const [codeLines, setCodeLines] = useState([]);
+  const [loadingCode, setLoadingCode] = useState(false);
+  const [expandingFile, setExpandingFile] = useState(false);
 
   const handleNavigate = useCallback(
     (filepath, line) => {
@@ -123,6 +127,78 @@ const FileNode = memo(({ data, id }) => {
     e.stopPropagation();
     setExpanded(!expanded);
   }, [expanded]);
+
+  // Expand this file's imports (drill down)
+  const handleExpandFile = useCallback(
+    async (e) => {
+      e.stopPropagation();
+      if (expandingFile || !data.filepath || !data.onExpandFile) return;
+
+      setExpandingFile(true);
+      try {
+        await data.onExpandFile(id, data.filepath);
+      } catch (err) {
+        console.error("Expand file error:", err);
+      }
+      setExpandingFile(false);
+    },
+    [data, id, expandingFile]
+  );
+
+  // Expand symbol to show code
+  const handleSymbolClick = useCallback(
+    (sym, e) => {
+      e.stopPropagation();
+
+      // If already expanded, collapse
+      if (expandedSymbol === sym.name) {
+        setExpandedSymbol(null);
+        setCodeLines([]);
+        return;
+      }
+
+      // Fetch code for this symbol
+      setLoadingCode(true);
+      setExpandedSymbol(sym.name);
+
+      socket.emit(
+        "code:request",
+        {
+          filepath: data.filepath,
+          line: sym.line,
+          end_line: sym.end_line,
+          name: sym.name,
+          context: 2,
+        },
+        (response) => {
+          setLoadingCode(false);
+          if (response.status === "ok") {
+            setCodeLines(response.lines);
+          }
+        }
+      );
+    },
+    [data.filepath, expandedSymbol]
+  );
+
+  // Double-click to navigate
+  const handleSymbolDoubleClick = useCallback(
+    (sym, e) => {
+      e.stopPropagation();
+      handleNavigate(data.filepath, sym.line);
+    },
+    [data.filepath, handleNavigate]
+  );
+
+  // Hover handlers for highlighting
+  const handleSymbolHover = useCallback(
+    (sym, entering) => {
+      if (data.onSymbolHover) {
+        data.onSymbolHover(id, sym, entering);
+      }
+    },
+    [id, data]
+  );
 
   // Group symbols by kind
   const groupedSymbols = useMemo(() => {
@@ -137,24 +213,88 @@ const FileNode = memo(({ data, id }) => {
 
   const kindOrder = ["Class", "Function", "Method", "Variable", "Constant", "Property"];
 
+  const renderSymbol = (sym, i) => (
+    <div key={i} className="symbol-item-wrapper">
+      <div
+        className={`symbol-item ${expandedSymbol === sym.name ? "active" : ""}`}
+        onClick={(e) => handleSymbolClick(sym, e)}
+        onDoubleClick={(e) => handleSymbolDoubleClick(sym, e)}
+        onMouseEnter={() => handleSymbolHover(sym, true)}
+        onMouseLeave={() => handleSymbolHover(sym, false)}
+        title={`Click to expand • Double-click to go to line ${sym.line}`}
+      >
+        <span className="symbol-bullet">•</span>
+        <span className="symbol-name">{sym.name}</span>
+        <span className="symbol-line">:{sym.line}</span>
+        <span className="symbol-expand-icon">
+          {expandedSymbol === sym.name ? "−" : "+"}
+        </span>
+      </div>
+
+      {expandedSymbol === sym.name && (
+        <div className="symbol-code-preview">
+          {loadingCode ? (
+            <div className="code-loading">Loading...</div>
+          ) : (
+            codeLines.map((line) => (
+              <div
+                key={line.num}
+                className={`code-line ${line.num === sym.line ? "highlight" : ""}`}
+              >
+                <span className="line-num">{line.num}</span>
+                <span className="line-text">{line.text || " "}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // Handle node hover
+  const handleNodeHover = useCallback(
+    (entering) => {
+      if (data.onSymbolHover) {
+        data.onSymbolHover(id, null, entering);
+      }
+    },
+    [id, data]
+  );
+
   return (
-    <div className="file-node">
+    <div
+      className={`file-node ${data.highlighted ? "highlighted" : ""}`}
+      onMouseEnter={() => handleNodeHover(true)}
+      onMouseLeave={() => handleNodeHover(false)}
+    >
       <Handle type="target" position={Position.Left} />
 
       <div className="file-header" onClick={handleToggle}>
         <span className="file-icon">📄</span>
         <span className="file-name">{data.filename}</span>
         <span className="file-toggle">{expanded ? "▼" : "▶"}</span>
-        <button
-          className="file-nav-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleNavigate(data.filepath, 1);
-          }}
-          title="Open file"
-        >
-          →
-        </button>
+        <div className="file-actions">
+          {!data.isExpanded && (
+            <button
+              className="file-expand-btn"
+              onClick={handleExpandFile}
+              title="Expand imports"
+              disabled={expandingFile}
+            >
+              {expandingFile ? "..." : "⤵"}
+            </button>
+          )}
+          <button
+            className="file-nav-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNavigate(data.filepath, 1);
+            }}
+            title="Open file"
+          >
+            →
+          </button>
+        </div>
       </div>
 
       <div className="file-path">{data.path}</div>
@@ -164,19 +304,10 @@ const FileNode = memo(({ data, id }) => {
           {kindOrder.map((kind) =>
             groupedSymbols[kind] ? (
               <div key={kind} className="symbol-group">
-                <div className="symbol-group-header">{kind}s ({groupedSymbols[kind].length})</div>
-                {groupedSymbols[kind].map((sym, i) => (
-                  <div
-                    key={i}
-                    className="symbol-item"
-                    onClick={() => handleNavigate(data.filepath, sym.line)}
-                    title={`Line ${sym.line}`}
-                  >
-                    <span className="symbol-bullet">•</span>
-                    <span className="symbol-name">{sym.name}</span>
-                    <span className="symbol-line">:{sym.line}</span>
-                  </div>
-                ))}
+                <div className="symbol-group-header">
+                  {kind}s ({groupedSymbols[kind].length})
+                </div>
+                {groupedSymbols[kind].map((sym, i) => renderSymbol(sym, i))}
               </div>
             ) : null
           )}
@@ -185,19 +316,10 @@ const FileNode = memo(({ data, id }) => {
             .filter((k) => !kindOrder.includes(k))
             .map((kind) => (
               <div key={kind} className="symbol-group">
-                <div className="symbol-group-header">{kind}s ({groupedSymbols[kind].length})</div>
-                {groupedSymbols[kind].map((sym, i) => (
-                  <div
-                    key={i}
-                    className="symbol-item"
-                    onClick={() => handleNavigate(data.filepath, sym.line)}
-                    title={`Line ${sym.line}`}
-                  >
-                    <span className="symbol-bullet">•</span>
-                    <span className="symbol-name">{sym.name}</span>
-                    <span className="symbol-line">:{sym.line}</span>
-                  </div>
-                ))}
+                <div className="symbol-group-header">
+                  {kind}s ({groupedSymbols[kind].length})
+                </div>
+                {groupedSymbols[kind].map((sym, i) => renderSymbol(sym, i))}
               </div>
             ))}
         </div>
@@ -381,9 +503,108 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [neovimConnected, setNeovimConnected] = useState(false);
   const [cwd, setCwd] = useState("");
+  const [hoveredNodeId, setHoveredNodeId] = useState(null);
 
   // Ref for stable callback
   const expandCallsRef = useRef(null);
+  const symbolHoverRef = useRef(null);
+  const expandFileRef = useRef(null);
+
+  // Handle symbol hover - highlight connected edges
+  const handleSymbolHover = useCallback(
+    (nodeId, sym, entering) => {
+      if (entering) {
+        setHoveredNodeId(nodeId);
+      } else {
+        setHoveredNodeId(null);
+      }
+    },
+    []
+  );
+
+  // Handle expanding a file's imports
+  const handleExpandFile = useCallback(
+    (sourceId, filepath) => {
+      return new Promise((resolve) => {
+        fetch("http://localhost:3000/api/expand-file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filepath }),
+        })
+          .then((res) => res.json())
+          .then((result) => {
+            if (result.status === "ok" && result.nodes) {
+              setNodes((currentNodes) => {
+                // Mark source as expanded
+                const updatedNodes = currentNodes.map((n) =>
+                  n.id === sourceId
+                    ? { ...n, data: { ...n.data, isExpanded: true } }
+                    : n
+                );
+
+                // Find source position
+                const sourceNode = currentNodes.find((n) => n.id === sourceId);
+                const sourceX = sourceNode?.position?.x || 0;
+                const sourceY = sourceNode?.position?.y || 0;
+
+                // Filter out existing nodes
+                const existingIds = new Set(currentNodes.map((n) => n.id));
+                const newNodes = result.nodes.filter((n) => !existingIds.has(n.id));
+
+                if (newNodes.length === 0) {
+                  resolve();
+                  return updatedNodes;
+                }
+
+                // Position new nodes to the right
+                const positionedNodes = newNodes.map((node, i) => ({
+                  ...node,
+                  type: "file",
+                  position: {
+                    x: sourceX + 350,
+                    y: sourceY + i * 250,
+                  },
+                  data: {
+                    ...node.data,
+                    onExpandCalls: (...args) => expandCallsRef.current?.(...args),
+                    onSymbolHover: (...args) => symbolHoverRef.current?.(...args),
+                    onExpandFile: (...args) => expandFileRef.current?.(...args),
+                  },
+                }));
+
+                resolve();
+                return [...updatedNodes, ...positionedNodes];
+              });
+
+              // Add edges
+              setEdges((currentEdges) => {
+                const newEdges = result.nodes
+                  .filter((n) => n.id !== sourceId)
+                  .map((n) => ({
+                    id: `e_${sourceId}_${n.id}`,
+                    source: sourceId,
+                    target: n.id,
+                  }))
+                  .filter(
+                    (e) =>
+                      !currentEdges.some(
+                        (ce) => ce.source === e.source && ce.target === e.target
+                      )
+                  );
+                return [...currentEdges, ...newEdges];
+              });
+            } else {
+              resolve();
+            }
+          })
+          .catch((err) => {
+            console.error("Expand file error:", err);
+            resolve();
+          });
+      });
+    },
+    [setNodes, setEdges]
+  );
 
   // Handle expanding a node's outgoing calls
   const handleExpandCalls = useCallback((sourceId, newNodes, newEdges) => {
@@ -457,6 +678,50 @@ function App() {
   }, [setNodes, setEdges]);
 
   expandCallsRef.current = handleExpandCalls;
+  symbolHoverRef.current = handleSymbolHover;
+  expandFileRef.current = handleExpandFile;
+
+  // Compute connected node IDs for highlighting
+  const connectedNodeIds = useMemo(() => {
+    if (!hoveredNodeId) return new Set();
+    const connected = new Set();
+    edges.forEach((edge) => {
+      if (edge.source === hoveredNodeId) {
+        connected.add(edge.target);
+      }
+      if (edge.target === hoveredNodeId) {
+        connected.add(edge.source);
+      }
+    });
+    return connected;
+  }, [edges, hoveredNodeId]);
+
+  // Compute highlighted edges based on hovered node
+  const styledEdges = useMemo(() => {
+    return edges.map((edge) => {
+      const isHighlighted =
+        hoveredNodeId && (edge.source === hoveredNodeId || edge.target === hoveredNodeId);
+      return {
+        ...edge,
+        style: isHighlighted
+          ? { stroke: "#22c55e", strokeWidth: 3 }
+          : { stroke: "#4f46e5", strokeWidth: 2 },
+        animated: isHighlighted,
+      };
+    });
+  }, [edges, hoveredNodeId]);
+
+  // Compute styled nodes with highlighting
+  const styledNodes = useMemo(() => {
+    if (!hoveredNodeId) return nodes;
+    return nodes.map((node) => ({
+      ...node,
+      data: {
+        ...node.data,
+        highlighted: connectedNodeIds.has(node.id),
+      },
+    }));
+  }, [nodes, hoveredNodeId, connectedNodeIds]);
 
   // Apply layout when triggered
   const [needsLayout, setNeedsLayout] = useState(false);
@@ -503,6 +768,8 @@ function App() {
           data: {
             ...node.data,
             onExpandCalls: (...args) => expandCallsRef.current?.(...args),
+            onSymbolHover: (...args) => symbolHoverRef.current?.(...args),
+            onExpandFile: (...args) => expandFileRef.current?.(...args),
           },
         }));
 
@@ -549,8 +816,8 @@ function App() {
         {cwd && <div className="cwd">{cwd}</div>}
       </div>
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={styledNodes}
+        edges={styledEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}

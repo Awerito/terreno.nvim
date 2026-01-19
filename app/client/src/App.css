@@ -245,6 +245,11 @@
   box-shadow: 0 4px 12px -1px rgba(79, 70, 229, 0.3);
 }
 
+.file-node.highlighted {
+  border-color: #22c55e;
+  box-shadow: 0 4px 16px -1px rgba(34, 197, 94, 0.4);
+}
+
 .file-header {
   display: flex;
   align-items: center;
@@ -273,9 +278,16 @@
   color: #64748b;
 }
 
-.file-nav-btn {
-  width: 20px;
-  height: 20px;
+.file-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.file-nav-btn,
+.file-expand-btn {
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: 4px;
   background: #334155;
@@ -285,11 +297,26 @@
   align-items: center;
   justify-content: center;
   font-size: 12px;
+  transition: all 0.15s ease;
 }
 
 .file-nav-btn:hover {
   background: #22c55e;
   color: white;
+}
+
+.file-expand-btn {
+  color: #f59e0b;
+}
+
+.file-expand-btn:hover {
+  background: #f59e0b;
+  color: #1e293b;
+}
+
+.file-expand-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .file-path {
@@ -320,6 +347,10 @@
   margin-bottom: 4px;
 }
 
+.symbol-item-wrapper {
+  margin-bottom: 2px;
+}
+
 .symbol-item {
   display: flex;
   align-items: center;
@@ -327,10 +358,16 @@
   gap: 6px;
   cursor: pointer;
   border-radius: 4px;
+  transition: all 0.15s ease;
 }
 
 .symbol-item:hover {
   background: rgba(79, 70, 229, 0.2);
+}
+
+.symbol-item.active {
+  background: rgba(79, 70, 229, 0.3);
+  border-left: 2px solid #4f46e5;
 }
 
 .symbol-bullet {
@@ -347,6 +384,58 @@
   font-size: 10px;
   color: #64748b;
   font-family: monospace;
+}
+
+.symbol-expand-icon {
+  font-size: 10px;
+  color: #64748b;
+  width: 14px;
+  text-align: center;
+}
+
+.symbol-item:hover .symbol-expand-icon {
+  color: #4f46e5;
+}
+
+/* Code preview inside file node */
+.symbol-code-preview {
+  background: #0f172a;
+  border-radius: 4px;
+  margin: 4px 8px 8px 16px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.symbol-code-preview .code-line {
+  display: flex;
+  padding: 1px 6px;
+}
+
+.symbol-code-preview .code-line.highlight {
+  background: rgba(79, 70, 229, 0.3);
+}
+
+.symbol-code-preview .line-num {
+  width: 28px;
+  text-align: right;
+  padding-right: 8px;
+  color: #475569;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.symbol-code-preview .line-text {
+  white-space: pre;
+  color: #cbd5e1;
+}
+
+.code-loading {
+  padding: 8px;
+  color: #64748b;
+  font-size: 10px;
 }
 
 /* File node handles */

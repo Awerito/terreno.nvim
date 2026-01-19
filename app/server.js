@@ -105,6 +105,31 @@ app.post("/api/expand-result", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// API endpoint to expand a file's imports (drill down)
+app.post("/api/expand-file", async (req, res) => {
+  const { filepath } = req.body;
+  console.log("Expand file request:", filepath);
+
+  const requestId = `expandfile_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  const expandPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingExpandRequests.delete(requestId);
+      reject(new Error("Timeout"));
+    }, 15000);
+    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
+  });
+
+  try {
+    await sendToNeovim(`require("terreno.lsp").expand_file_imports("${filepath}", "${requestId}")`);
+    const result = await expandPromise;
+    res.json({ status: "ok", ...result });
+  } catch (err) {
+    console.error("Expand file error:", err.message);
+    res.json({ status: "ok", nodes: [], edges: [] });
+  }
+});
+
 // API endpoint to receive document symbols from Neovim (for range detection)
 app.post("/api/symbols", (req, res) => {
   const { request_id, filepath, symbols } = req.body;
