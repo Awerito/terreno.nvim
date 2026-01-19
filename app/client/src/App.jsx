@@ -251,22 +251,8 @@ const FileNode = memo(({ data, id }) => {
     </div>
   );
 
-  // Handle node hover
-  const handleNodeHover = useCallback(
-    (entering) => {
-      if (data.onSymbolHover) {
-        data.onSymbolHover(id, null, entering);
-      }
-    },
-    [id, data]
-  );
-
   return (
-    <div
-      className={`file-node ${data.highlighted ? "highlighted" : ""}`}
-      onMouseEnter={() => handleNodeHover(true)}
-      onMouseLeave={() => handleNodeHover(false)}
-    >
+    <div className={`file-node ${data.highlighted ? "highlighted" : ""}`}>
       <Handle type="target" position={Position.Left} />
 
       <div className="file-header" onClick={handleToggle}>
@@ -503,23 +489,47 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [neovimConnected, setNeovimConnected] = useState(false);
   const [cwd, setCwd] = useState("");
-  const [hoveredNodeId, setHoveredNodeId] = useState(null);
+  const [highlightedFiles, setHighlightedFiles] = useState(new Set());
 
   // Ref for stable callback
   const expandCallsRef = useRef(null);
   const symbolHoverRef = useRef(null);
   const expandFileRef = useRef(null);
 
-  // Handle symbol hover - highlight connected edges
+  // Handle symbol hover - find references via LSP
   const handleSymbolHover = useCallback(
     (nodeId, sym, entering) => {
-      if (entering) {
-        setHoveredNodeId(nodeId);
-      } else {
-        setHoveredNodeId(null);
+      if (!entering || !sym) {
+        setHighlightedFiles(new Set());
+        return;
       }
+
+      // Find the node to get filepath
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node?.data?.filepath) return;
+
+      // Call server to get LSP references
+      fetch("http://localhost:3000/api/references", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filepath: node.data.filepath,
+          line: sym.line,
+          name: sym.name,
+        }),
+      })
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.status === "ok" && result.files) {
+            // Highlight files that reference this symbol
+            setHighlightedFiles(new Set(result.files));
+          }
+        })
+        .catch((err) => {
+          console.error("References error:", err);
+        });
     },
-    []
+    [nodes]
   );
 
   // Handle expanding a file's imports
@@ -681,26 +691,12 @@ function App() {
   symbolHoverRef.current = handleSymbolHover;
   expandFileRef.current = handleExpandFile;
 
-  // Compute connected node IDs for highlighting
-  const connectedNodeIds = useMemo(() => {
-    if (!hoveredNodeId) return new Set();
-    const connected = new Set();
-    edges.forEach((edge) => {
-      if (edge.source === hoveredNodeId) {
-        connected.add(edge.target);
-      }
-      if (edge.target === hoveredNodeId) {
-        connected.add(edge.source);
-      }
-    });
-    return connected;
-  }, [edges, hoveredNodeId]);
-
-  // Compute highlighted edges based on hovered node
+  // Style edges - highlight those connected to referenced files
   const styledEdges = useMemo(() => {
     return edges.map((edge) => {
       const isHighlighted =
-        hoveredNodeId && (edge.source === hoveredNodeId || edge.target === hoveredNodeId);
+        highlightedFiles.size > 0 &&
+        (highlightedFiles.has(edge.source) || highlightedFiles.has(edge.target));
       return {
         ...edge,
         style: isHighlighted
@@ -709,19 +705,19 @@ function App() {
         animated: isHighlighted,
       };
     });
-  }, [edges, hoveredNodeId]);
+  }, [edges, highlightedFiles]);
 
-  // Compute styled nodes with highlighting
+  // Style nodes - highlight those that reference the hovered symbol
   const styledNodes = useMemo(() => {
-    if (!hoveredNodeId) return nodes;
+    if (highlightedFiles.size === 0) return nodes;
     return nodes.map((node) => ({
       ...node,
       data: {
         ...node.data,
-        highlighted: connectedNodeIds.has(node.id),
+        highlighted: highlightedFiles.has(node.id),
       },
     }));
-  }, [nodes, hoveredNodeId, connectedNodeIds]);
+  }, [nodes, highlightedFiles]);
 
   // Apply layout when triggered
   const [needsLayout, setNeedsLayout] = useState(false);

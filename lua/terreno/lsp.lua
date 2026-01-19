@@ -581,6 +581,18 @@ M.build_file_graph = function(callback)
 
     for _, file in ipairs(all_files) do
       get_file_symbols(file, cwd, function(symbols)
+        pending = pending - 1
+
+        -- Skip files with no symbols (empty files like __init__.py)
+        if #symbols == 0 then
+          debug_log("skipping empty file: " .. file)
+          if pending == 0 then
+            debug_log("file graph: " .. #nodes .. " files")
+            callback({ nodes = nodes, edges = edges })
+          end
+          return
+        end
+
         local rel_path = file
         if file:sub(1, #cwd) == cwd then
           rel_path = file:sub(#cwd + 2)
@@ -607,7 +619,6 @@ M.build_file_graph = function(callback)
           })
         end
 
-        pending = pending - 1
         if pending == 0 then
           debug_log("file graph: " .. #nodes .. " files")
           callback({ nodes = nodes, edges = edges })
@@ -862,6 +873,76 @@ M.expand_node = function(filepath, line, col, request_id)
   end)
 end
 
+--- Find references for a symbol using LSP
+---@param filepath string
+---@param line number
+---@param request_id string
+M.find_references = function(filepath, line, request_id)
+  debug_log("find_references called: " .. filepath .. ":" .. line .. " request_id=" .. request_id)
+  local cwd = vim.fn.getcwd()
+
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
+
+  vim.defer_fn(function()
+    local clients = vim.lsp.get_clients({ bufnr = bufnr })
+    if #clients == 0 then
+      debug_log("No LSP clients for references")
+      M.send_references_result(request_id, {})
+      return
+    end
+
+    local params = {
+      textDocument = { uri = vim.uri_from_fname(filepath) },
+      position = { line = line - 1, character = 5 },
+      context = { includeDeclaration = true },
+    }
+
+    vim.lsp.buf_request(bufnr, "textDocument/references", params, function(err, result)
+      if err or not result then
+        debug_log("References error or empty: " .. vim.inspect(err))
+        M.send_references_result(request_id, {})
+        return
+      end
+
+      local files = {}
+      local seen = {}
+
+      for _, ref in ipairs(result) do
+        local uri = ref.uri
+        if uri then
+          local ref_path = vim.uri_to_fname(uri)
+          -- Only include project files
+          if is_project_file(ref_path, cwd) and not seen[ref_path] then
+            seen[ref_path] = true
+            table.insert(files, ref_path)
+          end
+        end
+      end
+
+      debug_log("find_references found " .. #files .. " files")
+      M.send_references_result(request_id, files)
+    end)
+  end, 50)
+end
+
+--- Send references result to server
+M.send_references_result = function(request_id, files)
+  debug_log("send_references_result: " .. request_id .. " files=" .. #files)
+  local url = require("terreno").config.server_url .. ":" .. require("terreno").config.port .. "/api/expand-result"
+  local data = vim.fn.json_encode({
+    request_id = request_id,
+    files = files,
+  })
+
+  vim.fn.jobstart({
+    "curl", "-s", "-X", "POST",
+    "-H", "Content-Type: application/json",
+    "-d", data,
+    url,
+  })
+end
+
 --- Expand a file's imports - get what this file depends on
 ---@param filepath string
 ---@param request_id string
@@ -896,6 +977,18 @@ M.expand_file_imports = function(filepath, request_id)
 
       for _, file in ipairs(imported_files) do
         get_file_symbols(file, cwd, function(symbols)
+          pending = pending - 1
+
+          -- Skip files with no symbols (empty files like __init__.py)
+          if #symbols == 0 then
+            debug_log("skipping empty file: " .. file)
+            if pending == 0 then
+              debug_log("expand_file_imports done: " .. #nodes .. " nodes")
+              M.send_expand_result(request_id, nodes, {})
+            end
+            return
+          end
+
           local rel_path = file
           if file:sub(1, #cwd) == cwd then
             rel_path = file:sub(#cwd + 2)
@@ -912,7 +1005,6 @@ M.expand_file_imports = function(filepath, request_id)
             },
           })
 
-          pending = pending - 1
           if pending == 0 then
             debug_log("expand_file_imports done: " .. #nodes .. " nodes")
             M.send_expand_result(request_id, nodes, {})

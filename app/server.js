@@ -92,17 +92,42 @@ app.post("/api/expand", async (req, res) => {
 
 // API endpoint to receive expand results from Neovim
 app.post("/api/expand-result", (req, res) => {
-  const { request_id, nodes, edges } = req.body;
-  console.log("Expand result:", request_id, nodes?.length, "nodes", edges?.length, "edges");
+  const { request_id, nodes, edges, files } = req.body;
+  console.log("Expand result:", request_id, "nodes:", nodes?.length, "edges:", edges?.length, "files:", files?.length);
 
   const pending = pendingExpandRequests.get(request_id);
   if (pending) {
     clearTimeout(pending.timeout);
-    pending.resolve({ nodes, edges });
+    pending.resolve({ nodes, edges, files });
     pendingExpandRequests.delete(request_id);
   }
 
   res.json({ status: "ok" });
+});
+
+// API endpoint to get LSP references for a symbol
+app.post("/api/references", async (req, res) => {
+  const { filepath, line, name } = req.body;
+  console.log("References request:", { filepath, line, name });
+
+  const requestId = `refs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  const refsPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingExpandRequests.delete(requestId);
+      reject(new Error("Timeout"));
+    }, 5000);
+    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
+  });
+
+  try {
+    await sendToNeovim(`require("terreno.lsp").find_references("${filepath}", ${line}, "${requestId}")`);
+    const result = await refsPromise;
+    res.json({ status: "ok", files: result.files || [] });
+  } catch (err) {
+    console.error("References error:", err.message);
+    res.json({ status: "ok", files: [] });
+  }
 });
 
 // API endpoint to expand a file's imports (drill down)
