@@ -128,12 +128,23 @@ M.send_graph = function(graph)
   local url = M.config.server_url .. ":" .. M.config.port .. "/api/graph"
   local json = vim.fn.json_encode(graph)
 
+  -- Write JSON to temp file to avoid "argument list too long" error
+  local tmpfile = "/tmp/terreno_graph.json"
+  local f = io.open(tmpfile, "w")
+  if f then
+    f:write(json)
+    f:close()
+  else
+    vim.notify("Terreno: failed to write temp file", vim.log.levels.ERROR)
+    return
+  end
+
   vim.fn.jobstart({
     "curl",
     "-s",
     "-X", "POST",
     "-H", "Content-Type: application/json",
-    "-d", json,
+    "-d", "@" .. tmpfile,
     url,
   }, {
     on_exit = function(_, code)
@@ -142,6 +153,8 @@ M.send_graph = function(graph)
       else
         vim.notify("Terreno: failed to send graph", vim.log.levels.ERROR)
       end
+      -- Clean up temp file
+      os.remove(tmpfile)
     end,
   })
 end
@@ -168,19 +181,15 @@ M.send_buffer = function()
   end)
 end
 
---- Send workspace symbols to the server (via LSP)
----@param query string|nil Search query (empty for all)
+--- Send workspace call graph to the server (via LSP)
+---@param query string|nil Search query to filter functions
 M.send_workspace = function(query)
-  lsp.get_workspace_symbols(query or "", function(symbols)
-    if #symbols == 0 then
-      vim.notify("Terreno: no workspace symbols found", vim.log.levels.WARN)
+  lsp.build_workspace_call_graph(query or "", function(graph)
+    if #graph.nodes == 0 then
+      vim.notify("Terreno: no functions found", vim.log.levels.WARN)
       return
     end
 
-    local cwd = vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
-    -- symbols already have filepath from workspace/symbol response
-    local graph = lsp.symbols_to_graph(symbols, cwd, nil)
-    vim.notify("Terreno: found " .. #symbols .. " workspace symbols", vim.log.levels.INFO)
     M.send_graph(graph)
   end)
 end
