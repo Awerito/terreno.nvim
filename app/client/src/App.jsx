@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, memo } from "react";
+import { useEffect, useState, useCallback, useRef, memo } from "react";
 import {
   ReactFlow,
   Background,
@@ -9,11 +9,38 @@ import {
   Handle,
   Position,
 } from "@xyflow/react";
+import Dagre from "@dagrejs/dagre";
 import { io } from "socket.io-client";
 import "@xyflow/react/dist/style.css";
 import "./App.css";
 
 const socket = io("http://localhost:3000");
+
+// Auto-layout using dagre
+const getLayoutedElements = (nodes, edges, direction = "TB") => {
+  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 120 });
+
+  nodes.forEach((node) => {
+    g.setNode(node.id, { width: 200, height: 80 });
+  });
+
+  edges.forEach((edge) => {
+    g.setEdge(edge.source, edge.target);
+  });
+
+  Dagre.layout(g);
+
+  const layoutedNodes = nodes.map((node) => {
+    const position = g.node(node.id);
+    return {
+      ...node,
+      position: { x: position.x - 100, y: position.y - 40 },
+    };
+  });
+
+  return { nodes: layoutedNodes, edges };
+};
 
 // Custom node component with expand/collapse and click-to-navigate
 const SymbolNode = memo(({ data, id }) => {
@@ -186,49 +213,54 @@ function App() {
   const [neovimConnected, setNeovimConnected] = useState(false);
   const [cwd, setCwd] = useState("");
 
+  // Ref for stable callback
+  const expandCallsRef = useRef(null);
+
   // Handle expanding a node's outgoing calls
-  const handleExpandCalls = useCallback(
-    (sourceId, newNodes, newEdges) => {
-      console.log("Expanding calls:", sourceId, newNodes.length, "nodes");
+  const handleExpandCalls = useCallback((sourceId, newNodes, newEdges) => {
+    console.log("Expanding calls:", sourceId, newNodes.length, "nodes");
 
-      // Find source node position
-      const sourceNode = nodes.find((n) => n.id === sourceId);
-      const sourceX = sourceNode?.position?.x || 0;
-      const sourceY = sourceNode?.position?.y || 0;
-
-      // Filter out nodes that already exist
-      const existingIds = new Set(nodes.map((n) => n.id));
+    setNodes((currentNodes) => {
+      const existingIds = new Set(currentNodes.map((n) => n.id));
       const uniqueNewNodes = newNodes.filter((n) => !existingIds.has(n.id));
 
-      // Position new nodes below the source node
-      const positionedNodes = uniqueNewNodes.map((node, i) => ({
+      const typedNewNodes = uniqueNewNodes.map((node) => ({
         ...node,
         type: node.type || "symbol",
-        position: {
-          x: sourceX + (i - uniqueNewNodes.length / 2) * 250,
-          y: sourceY + 150,
-        },
+        position: { x: 0, y: 0 },
         data: {
           ...node.data,
-          onExpandCalls: handleExpandCalls,
+          onExpandCalls: (...args) => expandCallsRef.current?.(...args),
         },
       }));
 
-      // Filter out edges that already exist
-      const existingEdgeIds = new Set(edges.map((e) => `${e.source}-${e.target}`));
+      return [...currentNodes, ...typedNewNodes];
+    });
+
+    setEdges((currentEdges) => {
+      const existingEdgeIds = new Set(currentEdges.map((e) => `${e.source}-${e.target}`));
       const uniqueNewEdges = newEdges.filter(
         (e) => !existingEdgeIds.has(`${e.source}-${e.target}`)
       );
+      return [...currentEdges, ...uniqueNewEdges];
+    });
 
-      if (positionedNodes.length > 0) {
-        setNodes((nds) => [...nds, ...positionedNodes]);
-      }
-      if (uniqueNewEdges.length > 0) {
-        setEdges((eds) => [...eds, ...uniqueNewEdges]);
-      }
-    },
-    [nodes, edges, setNodes, setEdges]
-  );
+    // Trigger layout after state updates
+    setTimeout(() => setNeedsLayout(true), 50);
+  }, [setNodes, setEdges]);
+
+  expandCallsRef.current = handleExpandCalls;
+
+  // Apply layout when triggered
+  const [needsLayout, setNeedsLayout] = useState(false);
+
+  useEffect(() => {
+    if (needsLayout && nodes.length > 0) {
+      const { nodes: layouted } = getLayoutedElements(nodes, edges);
+      setNodes(layouted);
+      setNeedsLayout(false);
+    }
+  }, [needsLayout, nodes, edges, setNodes]);
 
   useEffect(() => {
     // Check if already connected (socket created before component mounted)
@@ -261,13 +293,13 @@ function App() {
           type: node.type || "symbol",
           data: {
             ...node.data,
-            onExpandCalls: handleExpandCalls,
+            onExpandCalls: (...args) => expandCallsRef.current?.(...args),
           },
         }));
         setNodes(typedNodes);
-      }
-      if (data.edges) {
-        setEdges(data.edges);
+        setEdges(data.edges || []);
+        // Trigger layout
+        setTimeout(() => setNeedsLayout(true), 50);
       }
     });
 
@@ -287,7 +319,7 @@ function App() {
       socket.off("navigate:success");
       socket.off("navigate:error");
     };
-  }, [setNodes, setEdges, handleExpandCalls]);
+  }, [setNodes, setEdges]);
 
   return (
     <div className="app">
