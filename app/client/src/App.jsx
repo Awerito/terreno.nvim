@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, memo } from "react";
+import { useEffect, useState, useCallback, useRef, memo, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -18,7 +18,30 @@ const socket = io("http://localhost:3000");
 
 // Grid layout grouped by file (for initial view with no edges)
 const getGridLayout = (nodes) => {
-  // Group nodes by file
+  // For file nodes (Nogic style), lay them out in a row
+  const fileNodes = nodes.filter((n) => n.type === "file");
+  const otherNodes = nodes.filter((n) => n.type !== "file");
+
+  if (fileNodes.length > 0) {
+    // File nodes: horizontal layout with spacing
+    const colWidth = 320;
+    const layoutedNodes = fileNodes.map((node, index) => ({
+      ...node,
+      position: { x: index * colWidth, y: 0 },
+    }));
+
+    // Add any other nodes below
+    otherNodes.forEach((node, index) => {
+      layoutedNodes.push({
+        ...node,
+        position: { x: (index % 4) * 280, y: 400 + Math.floor(index / 4) * 90 },
+      });
+    });
+
+    return layoutedNodes;
+  }
+
+  // Legacy: Group symbol nodes by file
   const byFile = {};
   nodes.forEach((node) => {
     const file = node.data?.file || "unknown";
@@ -53,12 +76,19 @@ const getLayoutedElements = (nodes, edges, direction = "LR") => {
   }
 
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 50, ranksep: 200 });
+  g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 250 });
 
   nodes.forEach((node) => {
-    // Estimate node size based on label length
-    const width = Math.max(180, (node.data?.label?.length || 10) * 8 + 80);
-    g.setNode(node.id, { width, height: 70 });
+    // File nodes are taller (contain symbol list)
+    if (node.type === "file") {
+      const symbolCount = node.data?.symbols?.length || 0;
+      const height = Math.min(400, 100 + symbolCount * 24);
+      g.setNode(node.id, { width: 280, height });
+    } else {
+      // Estimate symbol node size based on label length
+      const width = Math.max(180, (node.data?.label?.length || 10) * 8 + 80);
+      g.setNode(node.id, { width, height: 70 });
+    }
   });
 
   edges.forEach((edge) => {
@@ -71,14 +101,116 @@ const getLayoutedElements = (nodes, edges, direction = "LR") => {
     const nodeInfo = g.node(node.id);
     return {
       ...node,
-      position: { x: nodeInfo.x - nodeInfo.width / 2, y: nodeInfo.y - 35 },
+      position: { x: nodeInfo.x - nodeInfo.width / 2, y: nodeInfo.y - nodeInfo.height / 2 },
     };
   });
 
   return { nodes: layoutedNodes, edges };
 };
 
-// Custom node component with expand/collapse and click-to-navigate
+// File node component (Nogic style) - shows file with its symbols
+const FileNode = memo(({ data, id }) => {
+  const [expanded, setExpanded] = useState(true);
+
+  const handleNavigate = useCallback(
+    (filepath, line) => {
+      socket.emit("navigate", { filepath, line: line || 1 });
+    },
+    []
+  );
+
+  const handleToggle = useCallback((e) => {
+    e.stopPropagation();
+    setExpanded(!expanded);
+  }, [expanded]);
+
+  // Group symbols by kind
+  const groupedSymbols = useMemo(() => {
+    const groups = {};
+    (data.symbols || []).forEach((sym) => {
+      const kind = sym.kind || "Other";
+      if (!groups[kind]) groups[kind] = [];
+      groups[kind].push(sym);
+    });
+    return groups;
+  }, [data.symbols]);
+
+  const kindOrder = ["Class", "Function", "Method", "Variable", "Constant", "Property"];
+
+  return (
+    <div className="file-node">
+      <Handle type="target" position={Position.Left} />
+
+      <div className="file-header" onClick={handleToggle}>
+        <span className="file-icon">📄</span>
+        <span className="file-name">{data.filename}</span>
+        <span className="file-toggle">{expanded ? "▼" : "▶"}</span>
+        <button
+          className="file-nav-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleNavigate(data.filepath, 1);
+          }}
+          title="Open file"
+        >
+          →
+        </button>
+      </div>
+
+      <div className="file-path">{data.path}</div>
+
+      {expanded && (
+        <div className="file-symbols">
+          {kindOrder.map((kind) =>
+            groupedSymbols[kind] ? (
+              <div key={kind} className="symbol-group">
+                <div className="symbol-group-header">{kind}s ({groupedSymbols[kind].length})</div>
+                {groupedSymbols[kind].map((sym, i) => (
+                  <div
+                    key={i}
+                    className="symbol-item"
+                    onClick={() => handleNavigate(data.filepath, sym.line)}
+                    title={`Line ${sym.line}`}
+                  >
+                    <span className="symbol-bullet">•</span>
+                    <span className="symbol-name">{sym.name}</span>
+                    <span className="symbol-line">:{sym.line}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null
+          )}
+          {/* Show any other kinds not in the order */}
+          {Object.keys(groupedSymbols)
+            .filter((k) => !kindOrder.includes(k))
+            .map((kind) => (
+              <div key={kind} className="symbol-group">
+                <div className="symbol-group-header">{kind}s ({groupedSymbols[kind].length})</div>
+                {groupedSymbols[kind].map((sym, i) => (
+                  <div
+                    key={i}
+                    className="symbol-item"
+                    onClick={() => handleNavigate(data.filepath, sym.line)}
+                    title={`Line ${sym.line}`}
+                  >
+                    <span className="symbol-bullet">•</span>
+                    <span className="symbol-name">{sym.name}</span>
+                    <span className="symbol-line">:{sym.line}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+        </div>
+      )}
+
+      <Handle type="source" position={Position.Right} />
+    </div>
+  );
+});
+
+FileNode.displayName = "FileNode";
+
+// Custom node component with expand/collapse and click-to-navigate (legacy)
 const SymbolNode = memo(({ data, id }) => {
   const [expanded, setExpanded] = useState(false);
   const [codeLines, setCodeLines] = useState([]);
@@ -226,6 +358,7 @@ SymbolNode.displayName = "SymbolNode";
 
 // Node types
 const nodeTypes = {
+  file: FileNode,
   symbol: SymbolNode,
   default: SymbolNode,
 };
@@ -365,15 +498,22 @@ function App() {
         const typedNodes = data.nodes.map((node) => ({
           ...node,
           type: node.type || "symbol",
+          // Ensure position exists (React Flow requires it)
+          position: node.position || { x: 0, y: 0 },
           data: {
             ...node.data,
             onExpandCalls: (...args) => expandCallsRef.current?.(...args),
           },
         }));
-        setNodes(typedNodes);
-        setEdges(data.edges || []);
-        // Trigger layout
-        setTimeout(() => setNeedsLayout(true), 50);
+
+        // Apply layout BEFORE setting nodes
+        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+          typedNodes,
+          data.edges || []
+        );
+
+        setNodes(layoutedNodes);
+        setEdges(layoutedEdges);
       }
     });
 

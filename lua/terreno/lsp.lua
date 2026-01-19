@@ -88,6 +88,11 @@ M.flatten_symbols = function(symbols, bufnr, parent)
         goto continue
       end
 
+      -- Skip anonymous callbacks (useEffect() callback, map() callback, etc.)
+      if name:match("%) callback$") or name:match("^callback$") then
+        goto continue
+      end
+
       local full_name = parent and (parent .. "." .. name) or name
       -- Use selectionRange for the name position (for prepareCallHierarchy)
       -- Fall back to range if selectionRange not available
@@ -476,7 +481,9 @@ local function get_file_functions(filepath, cwd, callback)
       if not err and result then
         local symbols = M.flatten_symbols(result, bufnr)
         for _, sym in ipairs(symbols) do
-          if sym.kind == 6 or sym.kind == 12 then -- Method, Function
+          -- Method=6, Function=12, Class=5
+        -- Skip Variables - too noisy (includes params, types, etc.)
+        if sym.kind == 5 or sym.kind == 6 or sym.kind == 12 then
             local rel_path = filepath
             if filepath:sub(1, #cwd) == cwd then
               rel_path = filepath:sub(#cwd + 2)
@@ -501,9 +508,47 @@ local function get_file_functions(filepath, cwd, callback)
   end, 50)
 end
 
---- Get functions from CURRENT buffer AND imported files (language agnostic via LSP)
----@param callback function Callback with (functions: table[])
-M.get_current_buffer_functions = function(callback)
+--- Get ALL symbols from a file (not filtered by kind)
+---@param filepath string
+---@param cwd string
+---@param callback function
+local function get_file_symbols(filepath, cwd, callback)
+  local bufnr = vim.fn.bufadd(filepath)
+  vim.fn.bufload(bufnr)
+
+  vim.defer_fn(function()
+    local clients = vim.lsp.get_clients({ bufnr = bufnr })
+    if #clients == 0 then
+      callback({})
+      return
+    end
+
+    local params = { textDocument = { uri = vim.uri_from_fname(filepath) } }
+
+    vim.lsp.buf_request(bufnr, "textDocument/documentSymbol", params, function(err, result)
+      local symbols = {}
+
+      if not err and result then
+        -- Get all symbols, organized by kind
+        local flat = M.flatten_symbols(result, bufnr)
+        for _, sym in ipairs(flat) do
+          table.insert(symbols, {
+            name = sym.name,
+            kind = sym.kind_name,
+            line = sym.line,
+            end_line = sym.end_line,
+          })
+        end
+      end
+
+      callback(symbols)
+    end)
+  end, 50)
+end
+
+--- Build file-based graph (Nogic style)
+---@param callback function Callback with (graph: table)
+M.build_file_graph = function(callback)
   local cwd = vim.fn.getcwd()
   local bufnr = vim.api.nvim_get_current_buf()
   local filepath = vim.api.nvim_buf_get_name(bufnr)
@@ -511,48 +556,102 @@ M.get_current_buffer_functions = function(callback)
   local clients = vim.lsp.get_clients({ bufnr = bufnr })
   if #clients == 0 then
     vim.notify("Terreno: no LSP attached to current buffer", vim.log.levels.WARN)
-    callback({})
+    callback({ nodes = {}, edges = {} })
     return
   end
 
-  debug_log("getting functions from current buffer + imports: " .. filepath)
+  debug_log("building file graph from: " .. filepath)
 
-  -- First, follow imports to find related files
+  -- Follow imports to find related files
   follow_imports_via_lsp(bufnr, cwd, function(imported_files)
     debug_log("found " .. #imported_files .. " imported files via LSP")
 
     local all_files = { filepath }
+    local file_set = { [filepath] = true }
     for _, f in ipairs(imported_files) do
-      table.insert(all_files, f)
+      if not file_set[f] then
+        file_set[f] = true
+        table.insert(all_files, f)
+      end
     end
 
-    local all_functions = {}
+    local nodes = {}
+    local edges = {}
     local pending = #all_files
 
     for _, file in ipairs(all_files) do
-      get_file_functions(file, cwd, function(funcs)
-        for _, fn in ipairs(funcs) do
-          table.insert(all_functions, fn)
+      get_file_symbols(file, cwd, function(symbols)
+        local rel_path = file
+        if file:sub(1, #cwd) == cwd then
+          rel_path = file:sub(#cwd + 2)
+        end
+
+        local node_id = file
+        table.insert(nodes, {
+          id = node_id,
+          type = "file",
+          data = {
+            filepath = file,
+            filename = vim.fn.fnamemodify(file, ":t"),
+            path = rel_path,
+            symbols = symbols,
+          },
+        })
+
+        -- Create edge from main file to imported files
+        if file ~= filepath then
+          table.insert(edges, {
+            id = "e_" .. filepath .. "_" .. file,
+            source = filepath,
+            target = file,
+          })
         end
 
         pending = pending - 1
         if pending == 0 then
-          debug_log("total functions: " .. #all_functions)
-          callback(all_functions)
+          debug_log("file graph: " .. #nodes .. " files")
+          callback({ nodes = nodes, edges = edges })
         end
       end)
     end
   end)
 end
 
+--- Get functions from CURRENT buffer AND imported files (legacy - kept for compatibility)
+---@param callback function Callback with (functions: table[])
+M.get_current_buffer_functions = function(callback)
+  -- Redirect to file graph
+  M.build_file_graph(function(graph)
+    local functions = {}
+    for _, node in ipairs(graph.nodes) do
+      for _, sym in ipairs(node.data.symbols or {}) do
+        table.insert(functions, {
+          name = sym.name,
+          kind_name = sym.kind,
+          filepath = node.data.filepath,
+          file = node.data.filename,
+          path = node.data.path,
+          line = sym.line,
+          end_line = sym.end_line,
+        })
+      end
+    end
+    callback(functions)
+  end)
+end
+
 M.build_workspace_call_graph = function(query, callback)
   debug_clear()
   debug_log("build_workspace_call_graph started, query: " .. (query or "nil"))
-  local cwd = vim.fn.getcwd()
-  debug_log("cwd: " .. cwd)
 
-  -- If no query, use current buffer only (on-demand expansion)
-  -- If query provided, use workspace/symbol to search
+  -- Use file-based graph (Nogic style)
+  M.build_file_graph(callback)
+end
+
+-- Legacy function kept for reference but not used
+M._legacy_build_workspace_call_graph = function(query, callback)
+  local cwd = vim.fn.getcwd()
+
   local get_functions = function(cb)
     if not query or query == "" then
       M.get_current_buffer_functions(cb)
@@ -560,7 +659,7 @@ M.build_workspace_call_graph = function(query, callback)
       M.get_workspace_symbols(query, function(symbols)
         local functions = {}
         for _, sym in ipairs(symbols) do
-          if sym.kind == 6 or sym.kind == 12 then
+          if sym.kind == 5 or sym.kind == 6 or sym.kind == 12 then
             table.insert(functions, sym)
           end
         end
@@ -570,8 +669,6 @@ M.build_workspace_call_graph = function(query, callback)
   end
 
   get_functions(function(functions)
-    debug_log("functions found: " .. #functions)
-
     if #functions == 0 then
       callback({ nodes = {}, edges = {} })
       return
@@ -579,13 +676,11 @@ M.build_workspace_call_graph = function(query, callback)
 
     local nodes = {}
     local edges = {}
-    local node_ids = {} -- Map filepath:line -> true for quick lookup
+    local node_ids = {}
 
-    -- First pass: create all nodes and build lookup
     for i, func in ipairs(functions) do
       local id = func.filepath .. ":" .. func.line
       node_ids[id] = true
-      debug_log("node: " .. func.name .. " -> " .. id)
 
       local rel_path = func.filepath
       if func.filepath:sub(1, #cwd) == cwd then
@@ -608,8 +703,6 @@ M.build_workspace_call_graph = function(query, callback)
         position = { x = (i % 5) * 250, y = math.floor(i / 5) * 120 },
       })
     end
-
-    debug_log("created " .. #nodes .. " nodes, starting edge discovery...")
 
     -- Second pass: find edges between existing nodes
     local pending = #functions
