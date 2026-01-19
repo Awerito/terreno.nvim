@@ -82,17 +82,12 @@ M.flatten_symbols = function(symbols, bufnr, parent)
     local kind = symbol.kind
     local range = symbol.range or (symbol.location and symbol.location.range)
 
-    if name and range then
-      -- Skip dunder methods (__init__, __enter__, etc.) - not useful for call graphs
-      if name:match("^__") and name:match("__$") then
-        goto continue
-      end
+    -- Skip dunder methods (__init__, __enter__, etc.) - not useful for call graphs
+    local is_dunder = name and name:match("^__") and name:match("__$")
+    -- Skip anonymous callbacks (useEffect() callback, map() callback, etc.)
+    local is_callback = name and (name:match("%) callback$") or name:match("^callback$"))
 
-      -- Skip anonymous callbacks (useEffect() callback, map() callback, etc.)
-      if name:match("%) callback$") or name:match("^callback$") then
-        goto continue
-      end
-
+    if name and range and not is_dunder and not is_callback then
       local full_name = parent and (parent .. "." .. name) or name
       -- Use selectionRange for the name position (for prepareCallHierarchy)
       -- Fall back to range if selectionRange not available
@@ -116,8 +111,6 @@ M.flatten_symbols = function(symbols, bufnr, parent)
         end
       end
     end
-
-    ::continue::
   end
 
   return result
@@ -320,7 +313,9 @@ local DEBUG = true
 local DEBUG_FILE = "/tmp/terreno_debug.log"
 
 local function debug_log(msg)
-  if not DEBUG then return end
+  if not DEBUG then
+    return
+  end
   local f = io.open(DEBUG_FILE, "a")
   if f then
     f:write(os.date("%H:%M:%S ") .. msg .. "\n")
@@ -329,7 +324,9 @@ local function debug_log(msg)
 end
 
 local function debug_clear()
-  if not DEBUG then return end
+  if not DEBUG then
+    return
+  end
   local f = io.open(DEBUG_FILE, "w")
   if f then
     f:write("=== Terreno Debug Log ===\n")
@@ -348,20 +345,21 @@ local function is_project_file(filepath, cwd)
   end
 
   -- Exclude dependency/generated directories
-  if filepath:match("/node_modules/")
-      or filepath:match("/%.git/")
-      or filepath:match("/env/")
-      or filepath:match("/venv/")
-      or filepath:match("/%.venv/")
-      or filepath:match("/__pycache__/")
-      or filepath:match("/site%-packages/")
-      or filepath:match("/dist/")
-      or filepath:match("/build/")
-      or filepath:match("/%.tox/")
-      or filepath:match("/%.eggs/")
-      or filepath:match("/%.mypy_cache/")
-      or filepath:match("/target/")  -- Rust
-      or filepath:match("/vendor/")  -- Go
+  if
+    filepath:match("/node_modules/")
+    or filepath:match("/%.git/")
+    or filepath:match("/env/")
+    or filepath:match("/venv/")
+    or filepath:match("/%.venv/")
+    or filepath:match("/__pycache__/")
+    or filepath:match("/site%-packages/")
+    or filepath:match("/dist/")
+    or filepath:match("/build/")
+    or filepath:match("/%.tox/")
+    or filepath:match("/%.eggs/")
+    or filepath:match("/%.mypy_cache/")
+    or filepath:match("/target/") -- Rust
+    or filepath:match("/vendor/") -- Go
   then
     return false
   end
@@ -405,51 +403,53 @@ local function follow_imports_via_lsp(bufnr, cwd, callback)
   -- For each line in the import section, try to find definitions
   for lnum, line in ipairs(lines) do
     -- Skip empty lines and comments
-    if line:match("^%s*$") or line:match("^%s*#") or line:match("^%s*//") or line:match("^%s*%-%-") then
-      goto continue
-    end
+    local is_skip_line = line:match("^%s*$") or line:match("^%s*#") or line:match("^%s*//") or line:match("^%s*%-%-")
 
-    -- Find identifiers on this line (words that could be imports)
-    for col, word in line:gmatch("()([%w_]+)") do
-      -- Skip common keywords
-      if word == "from" or word == "import" or word == "as" or word == "require"
-          or word == "use" or word == "const" or word == "let" or word == "var" then
-        goto next_word
-      end
+    if not is_skip_line then
+      -- Find identifiers on this line (words that could be imports)
+      for col, word in line:gmatch("()([%w_]+)") do
+        -- Skip common keywords
+        local is_keyword = word == "from"
+          or word == "import"
+          or word == "as"
+          or word == "require"
+          or word == "use"
+          or word == "const"
+          or word == "let"
+          or word == "var"
 
-      pending = pending + 1
-      local params = {
-        textDocument = { uri = vim.uri_from_fname(vim.api.nvim_buf_get_name(bufnr)) },
-        position = { line = lnum - 1, character = col - 1 },
-      }
+        if not is_keyword then
+          pending = pending + 1
+          local params = {
+            textDocument = { uri = vim.uri_from_fname(vim.api.nvim_buf_get_name(bufnr)) },
+            position = { line = lnum - 1, character = col - 1 },
+          }
 
-      vim.lsp.buf_request(bufnr, "textDocument/definition", params, function(err, result)
-        pending = pending - 1
+          vim.lsp.buf_request(bufnr, "textDocument/definition", params, function(err, result)
+            pending = pending - 1
 
-        if not err and result then
-          -- Handle both single result and array
-          local defs = vim.islist(result) and result or { result }
-          for _, def in ipairs(defs) do
-            local uri = def.uri or def.targetUri
-            if uri then
-              local def_path = vim.uri_to_fname(uri)
-              -- Only include project files
-              if is_project_file(def_path, cwd) and not seen[def_path] then
-                seen[def_path] = true
-                table.insert(found_files, def_path)
-                debug_log("import resolved: " .. word .. " -> " .. def_path)
+            if not err and result then
+              -- Handle both single result and array
+              local defs = vim.islist(result) and result or { result }
+              for _, def in ipairs(defs) do
+                local uri = def.uri or def.targetUri
+                if uri then
+                  local def_path = vim.uri_to_fname(uri)
+                  -- Only include project files
+                  if is_project_file(def_path, cwd) and not seen[def_path] then
+                    seen[def_path] = true
+                    table.insert(found_files, def_path)
+                    debug_log("import resolved: " .. word .. " -> " .. def_path)
+                  end
+                end
               end
             end
-          end
+
+            finish()
+          end)
         end
-
-        finish()
-      end)
-
-      ::next_word::
+      end
     end
-
-    ::continue::
   end
 
   started = true
@@ -482,8 +482,8 @@ local function get_file_functions(filepath, cwd, callback)
         local symbols = M.flatten_symbols(result, bufnr)
         for _, sym in ipairs(symbols) do
           -- Method=6, Function=12, Class=5
-        -- Skip Variables - too noisy (includes params, types, etc.)
-        if sym.kind == 5 or sym.kind == 6 or sym.kind == 12 then
+          -- Skip Variables - too noisy (includes params, types, etc.)
+          if sym.kind == 5 or sym.kind == 6 or sym.kind == 12 then
             local rel_path = filepath
             if filepath:sub(1, #cwd) == cwd then
               rel_path = filepath:sub(#cwd + 2)
@@ -798,7 +798,9 @@ end
 ---@param col number
 ---@param request_id string
 M.expand_node = function(filepath, line, col, request_id)
-  debug_log("expand_node called: " .. filepath .. ":" .. line .. " col=" .. (col or "nil") .. " request_id=" .. request_id)
+  debug_log(
+    "expand_node called: " .. filepath .. ":" .. line .. " col=" .. (col or "nil") .. " request_id=" .. request_id
+  )
   local cwd = vim.fn.getcwd()
   local bufnr = vim.fn.bufadd(filepath)
   vim.fn.bufload(bufnr)
@@ -940,9 +942,14 @@ M.send_references_result = function(request_id, files)
   })
 
   vim.fn.jobstart({
-    "curl", "-s", "-X", "POST",
-    "-H", "Content-Type: application/json",
-    "-d", data,
+    "curl",
+    "-s",
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    data,
     url,
   })
 end
@@ -1034,9 +1041,14 @@ M.send_expand_result = function(request_id, nodes, edges)
   })
 
   vim.fn.jobstart({
-    "curl", "-s", "-X", "POST",
-    "-H", "Content-Type: application/json",
-    "-d", data,
+    "curl",
+    "-s",
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    data,
     url,
   })
 end

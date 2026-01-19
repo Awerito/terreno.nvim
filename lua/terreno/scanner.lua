@@ -52,17 +52,21 @@ M.get_project_files = function(dir)
 
   while true do
     local name, type = vim.loop.fs_scandir_next(handle)
-    if not name then break end
+    if not name then
+      break
+    end
 
     local path = dir .. "/" .. name
 
     if type == "directory" then
       -- Skip common non-source directories
-      if not name:match("^%.") and
-         name ~= "node_modules" and
-         name ~= "__pycache__" and
-         name ~= "venv" and
-         name ~= ".git" then
+      if
+        not name:match("^%.")
+        and name ~= "node_modules"
+        and name ~= "__pycache__"
+        and name ~= "venv"
+        and name ~= ".git"
+      then
         local subfiles = M.get_project_files(path)
         for _, f in ipairs(subfiles) do
           table.insert(files, f)

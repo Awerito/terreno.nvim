@@ -120,9 +120,14 @@ M.register_socket = function(callback)
   })
 
   vim.fn.jobstart({
-    "curl", "-s", "-X", "POST",
-    "-H", "Content-Type: application/json",
-    "-d", data,
+    "curl",
+    "-s",
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    data,
     url,
   }, {
     on_exit = function(_, code)
@@ -170,9 +175,14 @@ M.send_document_symbols = function(filepath, request_id)
     })
 
     vim.fn.jobstart({
-      "curl", "-s", "-X", "POST",
-      "-H", "Content-Type: application/json",
-      "-d", data,
+      "curl",
+      "-s",
+      "-X",
+      "POST",
+      "-H",
+      "Content-Type: application/json",
+      "-d",
+      data,
       url,
     })
   end)
@@ -234,9 +244,12 @@ M.send_graph = function(graph)
   vim.fn.jobstart({
     "curl",
     "-s",
-    "-X", "POST",
-    "-H", "Content-Type: application/json",
-    "-d", "@" .. tmpfile,
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    "@" .. tmpfile,
     url,
   }, {
     on_exit = function(_, code)
