@@ -13,12 +13,12 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173",
+    origin: /^http:\/\/localhost:\d+$/,
     methods: ["GET", "POST"],
   },
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 0;
 
 // Store Neovim connection info
 let neovimSocket = null;
@@ -378,5 +378,7 @@ io.on("connection", (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Terreno server running at http://localhost:${PORT}`);
+  const actualPort = server.address().port;
+  console.log(`TERRENO_PORT=${actualPort}`);
+  console.log(`Terreno server running at http://localhost:${actualPort}`);
 });

@@ -1,6 +1,10 @@
 import { io } from "socket.io-client";
 
-const SERVER_URL = "http://localhost:3000";
+// In dev mode (Vite), connect to fixed port 3000
+// In production, client is served from the same server
+const SERVER_URL = import.meta.env.DEV
+  ? "http://localhost:3000"
+  : window.location.origin;
 
 export const socket = io(SERVER_URL);
 
