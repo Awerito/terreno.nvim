@@ -24,6 +24,9 @@ const PORT = process.env.PORT || 0;
 let neovimSocket = null;
 let neovimCwd = null;
 
+// Store latest graph for new clients
+let latestGraph = null;
+
 // Cache for document symbols per file (for range detection)
 const symbolsCache = new Map();
 
@@ -94,6 +97,8 @@ app.post("/api/graph", (req, res) => {
   console.log("Graph received from Neovim:", graph.nodes?.length, "nodes");
   // Add cwd to graph for resolving relative paths
   graph.cwd = neovimCwd;
+  // Store for new clients
+  latestGraph = graph;
   io.emit("graph:data", graph);
   res.json({ status: "ok" });
 });
@@ -293,6 +298,11 @@ io.on("connection", (socket) => {
   // Send current neovim status
   if (neovimSocket) {
     socket.emit("neovim:connected", { cwd: neovimCwd });
+  }
+
+  // Send latest graph to new client
+  if (latestGraph) {
+    socket.emit("graph:data", latestGraph);
   }
 
   // Receive graph data from Neovim

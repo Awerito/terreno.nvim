@@ -15,17 +15,17 @@ local function with_server(callback)
       terreno.server_name = vim.v.servername
     end
 
-    -- Register with server
-    terreno.register_socket()
+    -- Register with server, then proceed
+    terreno.register_socket(function()
+      -- Open browser on first run
+      if not vim.g.terreno_browser_opened then
+        vim.g.terreno_browser_opened = true
+        terreno.open_browser(port)
+      end
 
-    -- Open browser on first run
-    if not vim.g.terreno_browser_opened then
-      vim.g.terreno_browser_opened = true
-      terreno.open_browser(port)
-    end
-
-    -- Execute the actual command
-    callback()
+      -- Execute the actual command
+      callback()
+    end)
   end)
 end
 

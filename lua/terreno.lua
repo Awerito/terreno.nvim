@@ -107,7 +107,8 @@ M.setup = function(opts)
 end
 
 --- Register Neovim socket with the Terreno server
-M.register_socket = function()
+---@param callback function|nil Called when registration completes
+M.register_socket = function(callback)
   if not M.server_port then
     vim.notify("Terreno: server not running", vim.log.levels.ERROR)
     return
@@ -127,6 +128,9 @@ M.register_socket = function()
     on_exit = function(_, code)
       if code == 0 then
         vim.notify("Terreno: connected to server", vim.log.levels.INFO)
+        if callback then
+          vim.schedule(callback)
+        end
       end
     end,
   })
