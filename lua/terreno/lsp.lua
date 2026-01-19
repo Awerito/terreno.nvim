@@ -324,6 +324,38 @@ local function debug_clear()
   end
 end
 
+--- Check if a filepath is a project file (not a dependency)
+---@param filepath string
+---@param cwd string
+---@return boolean
+local function is_project_file(filepath, cwd)
+  -- Must be inside cwd
+  if filepath:sub(1, #cwd) ~= cwd then
+    return false
+  end
+
+  -- Exclude dependency/generated directories
+  if filepath:match("/node_modules/")
+      or filepath:match("/%.git/")
+      or filepath:match("/env/")
+      or filepath:match("/venv/")
+      or filepath:match("/%.venv/")
+      or filepath:match("/__pycache__/")
+      or filepath:match("/site%-packages/")
+      or filepath:match("/dist/")
+      or filepath:match("/build/")
+      or filepath:match("/%.tox/")
+      or filepath:match("/%.eggs/")
+      or filepath:match("/%.mypy_cache/")
+      or filepath:match("/target/")  -- Rust
+      or filepath:match("/vendor/")  -- Go
+  then
+    return false
+  end
+
+  return true
+end
+
 --- Get all project files (Python, JS, TS, Lua, etc.)
 local function get_project_files()
   local cwd = vim.fn.getcwd()
@@ -331,17 +363,9 @@ local function get_project_files()
   local pattern = "*.{" .. table.concat(extensions, ",") .. "}"
 
   local files = vim.fn.globpath(cwd, "**/" .. pattern, false, true)
-  -- Filter out common non-source directories
   local filtered = {}
   for _, file in ipairs(files) do
-    if not file:match("/node_modules/")
-        and not file:match("/%.git/")
-        and not file:match("/env/")
-        and not file:match("/venv/")
-        and not file:match("/__pycache__/")
-        and not file:match("/%.venv/")
-        and not file:match("/dist/")
-        and not file:match("/build/") then
+    if is_project_file(file, cwd) then
       table.insert(filtered, file)
     end
   end
@@ -610,12 +634,9 @@ M.expand_node = function(filepath, line, col, request_id)
         local target_filepath = vim.uri_to_fname(target_uri)
         local target_id = target_filepath .. ":" .. target_line
 
-        -- Only include calls to files in our project
-        if target_filepath:sub(1, #cwd) == cwd then
-          local rel_path = target_filepath
-          if target_filepath:sub(1, #cwd) == cwd then
-            rel_path = target_filepath:sub(#cwd + 2)
-          end
+        -- Only include calls to project files (not dependencies)
+        if is_project_file(target_filepath, cwd) then
+          local rel_path = target_filepath:sub(#cwd + 2)
 
           table.insert(new_nodes, {
             id = target_id,

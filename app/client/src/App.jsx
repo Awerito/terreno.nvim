@@ -16,13 +16,15 @@ import "./App.css";
 
 const socket = io("http://localhost:3000");
 
-// Auto-layout using dagre
-const getLayoutedElements = (nodes, edges, direction = "TB") => {
+// Auto-layout using dagre (LR = left-right, like a call tree)
+const getLayoutedElements = (nodes, edges, direction = "LR") => {
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 120 });
+  g.setGraph({ rankdir: direction, nodesep: 50, ranksep: 200 });
 
   nodes.forEach((node) => {
-    g.setNode(node.id, { width: 200, height: 80 });
+    // Estimate node size based on label length
+    const width = Math.max(180, (node.data?.label?.length || 10) * 8 + 80);
+    g.setNode(node.id, { width, height: 70 });
   });
 
   edges.forEach((edge) => {
@@ -32,10 +34,10 @@ const getLayoutedElements = (nodes, edges, direction = "TB") => {
   Dagre.layout(g);
 
   const layoutedNodes = nodes.map((node) => {
-    const position = g.node(node.id);
+    const nodeInfo = g.node(node.id);
     return {
       ...node,
-      position: { x: position.x - 100, y: position.y - 40 },
+      position: { x: nodeInfo.x - nodeInfo.width / 2, y: nodeInfo.y - 35 },
     };
   });
 
@@ -124,7 +126,7 @@ const SymbolNode = memo(({ data, id }) => {
 
   return (
     <div className={`symbol-node ${expanded ? "expanded" : ""}`}>
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} />
 
       <div className="node-header">
         <div className="node-label">{data.label}</div>
@@ -181,7 +183,7 @@ const SymbolNode = memo(({ data, id }) => {
         </div>
       )}
 
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 });
