@@ -929,7 +929,11 @@ end
 --- Send references result to server
 M.send_references_result = function(request_id, files)
   debug_log("send_references_result: " .. request_id .. " files=" .. #files)
-  local url = require("terreno").config.server_url .. ":" .. require("terreno").config.port .. "/api/expand-result"
+  local terreno = require("terreno")
+  if not terreno.server_port then
+    return
+  end
+  local url = terreno.config.server_url .. ":" .. terreno.server_port .. "/api/expand-result"
   local data = vim.fn.json_encode({
     request_id = request_id,
     files = files,
@@ -1018,7 +1022,11 @@ end
 --- Send expand result to server
 M.send_expand_result = function(request_id, nodes, edges)
   debug_log("send_expand_result: " .. request_id .. " nodes=" .. #nodes .. " edges=" .. #edges)
-  local url = require("terreno").config.server_url .. ":" .. require("terreno").config.port .. "/api/expand-result"
+  local terreno = require("terreno")
+  if not terreno.server_port then
+    return
+  end
+  local url = terreno.config.server_url .. ":" .. terreno.server_port .. "/api/expand-result"
   local data = vim.fn.json_encode({
     request_id = request_id,
     nodes = nodes,
