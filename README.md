@@ -1,47 +1,52 @@
-# A Neovim Plugin Template
+# terreno.nvim
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/ellisonleao/nvim-plugin-template/lint-test.yml?branch=main&style=for-the-badge)
-![Lua](https://img.shields.io/badge/Made%20with%20Lua-blueviolet.svg?style=for-the-badge&logo=lua)
+Visualize your codebase structure in the browser. Navigate code relationships interactively.
 
-A template repository for Neovim plugins.
+## Features
 
-## Using it
+- **File graph visualization** - See how files connect via imports
+- **Symbol exploration** - Expand files to see functions, classes, variables
+- **Bidirectional navigation** - Click nodes to jump to code in Neovim
+- **LSP-powered** - Uses your existing LSP for accurate symbol detection
 
-Via `gh`:
+## Requirements
 
+- Neovim 0.9+
+- Node.js 18+
+- LSP configured for your language
+
+## Installation
+
+### lazy.nvim
+
+```lua
+{
+  "Awerito/terreno.nvim",
+  build = ":call terreno#util#install()",
+  config = function()
+    require("terreno").setup()
+  end,
+}
 ```
-$ gh repo create my-plugin -p ellisonleao/nvim-plugin-template
+
+## Usage
+
+```vim
+:Terreno workspace       " Visualize workspace file structure
+:Terreno buffer          " Visualize current buffer symbols
+:Terreno calls           " Visualize call hierarchy from cursor
 ```
 
-Via github web page:
+## How it works
 
-Click on `Use this template`
+1. Plugin starts a local Node.js server on a random port
+2. Opens browser with React-based graph visualization
+3. Neovim sends LSP data to server via HTTP
+4. Server pushes updates to browser via WebSocket
+5. Clicking nodes sends navigation commands back to Neovim
 
-![](https://docs.github.com/assets/cb-36544/images/help/repository/use-this-template-button.png)
+## Inspiration
 
-## Features and structure
-
-- 100% Lua
-- Github actions for:
-  - running tests using [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) and [busted](https://olivinelabs.com/busted/)
-  - check for formatting errors (Stylua)
-  - vimdocs autogeneration from README.md file
-  - luarocks release (LUAROCKS_API_KEY secret configuration required)
-
-### Plugin structure
-
-```
-.
-├── lua
-│   ├── terreno
-│   │   └── module.lua
-│   └── terreno.lua
-├── Makefile
-├── plugin
-│   └── terreno.lua
-├── README.md
-├── tests
-│   ├── minimal_init.lua
-│   └── terreno
-│       └── terreno_spec.lua
-```
+- [Nogic](https://nogic.app/) - Visual codebase exploration
+- [markdown-preview.nvim](https://github.com/iamcco/markdown-preview.nvim) - Server lifecycle pattern
+- [nvim-plugin-template](https://github.com/ellisonleao/nvim-plugin-template) - Plugin structure
