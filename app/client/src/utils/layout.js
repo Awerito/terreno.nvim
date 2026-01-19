@@ -1,53 +1,63 @@
 import Dagre from "@dagrejs/dagre";
 
 /**
- * Grid layout for nodes grouped by file (for initial view with no edges)
+ * Estimate node dimensions based on content.
+ * These match the CSS styles in App.css for .file-node
+ */
+const estimateNodeSize = (node) => {
+  if (node.type !== "file") {
+    // Legacy symbol nodes
+    const labelLength = node.data?.label?.length || 10;
+    return {
+      width: Math.max(180, labelLength * 8 + 80),
+      height: 70,
+    };
+  }
+
+  const symbols = node.data?.symbols || [];
+
+  // Width: based on longest symbol name or filename
+  // Also consider that code previews can expand the card significantly
+  const filename = node.data?.filename || "";
+  const longestSymbol = symbols.reduce(
+    (max, s) => Math.max(max, s.name?.length || 0),
+    0
+  );
+  const maxTextLength = Math.max(filename.length, longestSymbol);
+  // Base width from text + extra space for potential code preview (avg 80 chars)
+  const baseWidth = Math.max(280, maxTextLength * 8 + 120);
+  const codePreviewBuffer = 300; // space for expanded code
+  const width = baseWidth + codePreviewBuffer;
+
+  // Height: header + path + symbols list
+  const headerHeight = 50; // file-header + file-path
+  const symbolHeight = 28; // each symbol row
+  const groupHeaderHeight = 24; // "METHODS (n)" etc
+  const groupCount = new Set(symbols.map((s) => s.kind)).size;
+  const symbolsHeight = symbols.length * symbolHeight + groupCount * groupHeaderHeight;
+  const maxSymbolsHeight = 300; // matches max-height in CSS
+  const height = headerHeight + Math.min(symbolsHeight, maxSymbolsHeight) + 16; // padding
+
+  return { width, height };
+};
+
+/**
+ * Grid layout for initial view with no edges
  */
 export const getGridLayout = (nodes) => {
   const fileNodes = nodes.filter((n) => n.type === "file");
-  const otherNodes = nodes.filter((n) => n.type !== "file");
 
-  if (fileNodes.length > 0) {
-    const colWidth = 320;
-    const layoutedNodes = fileNodes.map((node, index) => ({
-      ...node,
-      position: { x: index * colWidth, y: 0 },
-    }));
+  if (fileNodes.length === 0) return nodes;
 
-    otherNodes.forEach((node, index) => {
-      layoutedNodes.push({
-        ...node,
-        position: { x: (index % 4) * 280, y: 400 + Math.floor(index / 4) * 90 },
-      });
-    });
+  // Calculate max width to use as column spacing
+  const sizes = fileNodes.map((n) => estimateNodeSize(n));
+  const maxWidth = Math.max(...sizes.map((s) => s.width));
+  const gap = 40;
 
-    return layoutedNodes;
-  }
-
-  // Legacy: Group symbol nodes by file
-  const byFile = {};
-  nodes.forEach((node) => {
-    const file = node.data?.file || "unknown";
-    if (!byFile[file]) byFile[file] = [];
-    byFile[file].push(node);
-  });
-
-  const files = Object.keys(byFile).sort();
-  const layoutedNodes = [];
-  const colWidth = 280;
-  const rowHeight = 90;
-
-  files.forEach((file, colIndex) => {
-    const fileNodes = byFile[file];
-    fileNodes.forEach((node, rowIndex) => {
-      layoutedNodes.push({
-        ...node,
-        position: { x: colIndex * colWidth, y: rowIndex * rowHeight },
-      });
-    });
-  });
-
-  return layoutedNodes;
+  return fileNodes.map((node, index) => ({
+    ...node,
+    position: { x: index * (maxWidth + gap), y: 0 },
+  }));
 };
 
 /**
@@ -58,18 +68,27 @@ export const getLayoutedElements = (nodes, edges, direction = "LR") => {
     return { nodes: getGridLayout(nodes), edges };
   }
 
+  // Calculate sizes for all nodes
+  const nodeSizes = new Map();
+  nodes.forEach((node) => {
+    nodeSizes.set(node.id, estimateNodeSize(node));
+  });
+
+  // Find max dimensions for spacing calculations
+  const allSizes = Array.from(nodeSizes.values());
+  const maxHeight = Math.max(...allSizes.map((s) => s.height));
+  const maxWidth = Math.max(...allSizes.map((s) => s.width));
+
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 80, ranksep: 250 });
+  g.setGraph({
+    rankdir: direction,
+    nodesep: Math.max(30, maxHeight * 0.1), // vertical gap proportional to node height
+    ranksep: maxWidth + 80, // horizontal gap = node width + margin
+  });
 
   nodes.forEach((node) => {
-    if (node.type === "file") {
-      const symbolCount = node.data?.symbols?.length || 0;
-      const height = Math.min(400, 100 + symbolCount * 24);
-      g.setNode(node.id, { width: 280, height });
-    } else {
-      const width = Math.max(180, (node.data?.label?.length || 10) * 8 + 80);
-      g.setNode(node.id, { width, height: 70 });
-    }
+    const size = nodeSizes.get(node.id);
+    g.setNode(node.id, size);
   });
 
   edges.forEach((edge) => {

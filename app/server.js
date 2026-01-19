@@ -27,8 +27,46 @@ let neovimCwd = null;
 // Cache for document symbols per file (for range detection)
 const symbolsCache = new Map();
 
-// Pending symbol requests (request_id -> { resolve, reject, timeout })
-const pendingSymbolRequests = new Map();
+// Pending requests (request_id -> { resolve, reject, cleanup })
+const pendingRequests = new Map();
+
+/**
+ * Create a pending request that can be resolved externally.
+ * Returns { promise, requestId, cleanup }
+ */
+function createPendingRequest(prefix, timeoutMs) {
+  const requestId = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+  const { promise, resolve, reject } = Promise.withResolvers();
+
+  const timeoutId = setTimeout(() => {
+    pendingRequests.delete(requestId);
+    reject(new Error(`Timeout after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  const cleanup = () => {
+    clearTimeout(timeoutId);
+    pendingRequests.delete(requestId);
+  };
+
+  const wrappedResolve = (value) => {
+    cleanup();
+    resolve(value);
+  };
+
+  pendingRequests.set(requestId, { resolve: wrappedResolve, reject, cleanup });
+
+  return { promise, requestId, cleanup };
+}
+
+/**
+ * Resolve a pending request by ID
+ */
+function resolvePendingRequest(requestId, value) {
+  const pending = pendingRequests.get(requestId);
+  if (pending) {
+    pending.resolve(value);
+  }
+}
 
 // Middleware
 app.use(cors());
@@ -60,31 +98,19 @@ app.post("/api/graph", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// Pending expand requests
-const pendingExpandRequests = new Map();
-
 // API endpoint to request node expansion
 app.post("/api/expand", async (req, res) => {
   const { filepath, line, col } = req.body;
   console.log("Expand request:", { filepath, line, col });
 
-  const requestId = `expand_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  // Create promise for response
-  const expandPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingExpandRequests.delete(requestId);
-      reject(new Error("Timeout"));
-    }, 10000);
-    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
-  });
+  const { promise, requestId, cleanup } = createPendingRequest("expand", 10000);
 
   try {
-    // Ask Neovim to expand the node
     await sendToNeovim(`require("terreno.lsp").expand_node("${filepath}", ${line}, ${col || 5}, "${requestId}")`);
-    const result = await expandPromise;
+    const result = await promise;
     res.json({ status: "ok", ...result });
   } catch (err) {
+    cleanup();
     console.error("Expand error:", err.message);
     res.json({ status: "ok", nodes: [], edges: [] });
   }
@@ -94,14 +120,7 @@ app.post("/api/expand", async (req, res) => {
 app.post("/api/expand-result", (req, res) => {
   const { request_id, nodes, edges, files } = req.body;
   console.log("Expand result:", request_id, "nodes:", nodes?.length, "edges:", edges?.length, "files:", files?.length);
-
-  const pending = pendingExpandRequests.get(request_id);
-  if (pending) {
-    clearTimeout(pending.timeout);
-    pending.resolve({ nodes, edges, files });
-    pendingExpandRequests.delete(request_id);
-  }
-
+  resolvePendingRequest(request_id, { nodes, edges, files });
   res.json({ status: "ok" });
 });
 
@@ -110,21 +129,14 @@ app.post("/api/references", async (req, res) => {
   const { filepath, line, name } = req.body;
   console.log("References request:", { filepath, line, name });
 
-  const requestId = `refs_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  const refsPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingExpandRequests.delete(requestId);
-      reject(new Error("Timeout"));
-    }, 5000);
-    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
-  });
+  const { promise, requestId, cleanup } = createPendingRequest("refs", 5000);
 
   try {
     await sendToNeovim(`require("terreno.lsp").find_references("${filepath}", ${line}, "${requestId}")`);
-    const result = await refsPromise;
+    const result = await promise;
     res.json({ status: "ok", files: result.files || [] });
   } catch (err) {
+    cleanup();
     console.error("References error:", err.message);
     res.json({ status: "ok", files: [] });
   }
@@ -135,21 +147,14 @@ app.post("/api/expand-file", async (req, res) => {
   const { filepath } = req.body;
   console.log("Expand file request:", filepath);
 
-  const requestId = `expandfile_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-  const expandPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingExpandRequests.delete(requestId);
-      reject(new Error("Timeout"));
-    }, 15000);
-    pendingExpandRequests.set(requestId, { resolve, reject, timeout });
-  });
+  const { promise, requestId, cleanup } = createPendingRequest("expandfile", 15000);
 
   try {
     await sendToNeovim(`require("terreno.lsp").expand_file_imports("${filepath}", "${requestId}")`);
-    const result = await expandPromise;
+    const result = await promise;
     res.json({ status: "ok", ...result });
   } catch (err) {
+    cleanup();
     console.error("Expand file error:", err.message);
     res.json({ status: "ok", nodes: [], edges: [] });
   }
@@ -159,47 +164,28 @@ app.post("/api/expand-file", async (req, res) => {
 app.post("/api/symbols", (req, res) => {
   const { request_id, filepath, symbols } = req.body;
   console.log("Symbols received:", filepath, symbols?.length, "symbols");
-
-  // Cache the symbols
   symbolsCache.set(filepath, symbols);
-
-  // Resolve pending request if any
-  const pending = pendingSymbolRequests.get(request_id);
-  if (pending) {
-    clearTimeout(pending.timeout);
-    pending.resolve(symbols);
-    pendingSymbolRequests.delete(request_id);
-  }
-
+  resolvePendingRequest(request_id, symbols);
   res.json({ status: "ok" });
 });
 
 // Request document symbols from Neovim and wait for response
 async function requestSymbols(filepath) {
-  // Check cache first
   if (symbolsCache.has(filepath)) {
     console.log("Symbols cache hit:", filepath);
     return symbolsCache.get(filepath);
   }
 
-  // Generate unique request ID
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const { promise, requestId, cleanup } = createPendingRequest("symbols", 5000);
 
-  // Create promise that will be resolved when Neovim responds
-  const symbolsPromise = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingSymbolRequests.delete(requestId);
-      reject(new Error("Timeout waiting for symbols"));
-    }, 5000);
-
-    pendingSymbolRequests.set(requestId, { resolve, reject, timeout });
-  });
-
-  // Ask Neovim to send document symbols
-  console.log("Requesting symbols from Neovim:", filepath);
-  await sendToNeovim(`require("terreno").send_document_symbols("${filepath}", "${requestId}")`);
-
-  return symbolsPromise;
+  try {
+    console.log("Requesting symbols from Neovim:", filepath);
+    await sendToNeovim(`require("terreno").send_document_symbols("${filepath}", "${requestId}")`);
+    return await promise;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
 }
 
 // Find symbol in list by name and line

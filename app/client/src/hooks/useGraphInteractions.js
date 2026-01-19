@@ -1,6 +1,36 @@
 import { useState, useCallback, useRef } from "react";
 import { fetchReferences, fetchExpandFile } from "../utils/socket";
 
+/**
+ * Estimate node height based on symbol count
+ */
+const estimateNodeHeight = (symbols = []) => {
+  const headerHeight = 50;
+  const symbolHeight = 28;
+  const groupHeaderHeight = 24;
+  const groupCount = new Set(symbols.map((s) => s.kind)).size;
+  const symbolsHeight = symbols.length * symbolHeight + groupCount * groupHeaderHeight;
+  const maxSymbolsHeight = 300;
+  return headerHeight + Math.min(symbolsHeight, maxSymbolsHeight) + 16;
+};
+
+/**
+ * Estimate node width based on content
+ * Includes buffer for expanded code preview
+ */
+const estimateNodeWidth = (node) => {
+  const filename = node.data?.filename || "";
+  const symbols = node.data?.symbols || [];
+  const longestSymbol = symbols.reduce(
+    (max, s) => Math.max(max, s.name?.length || 0),
+    0
+  );
+  const maxTextLength = Math.max(filename.length, longestSymbol);
+  const baseWidth = Math.max(280, maxTextLength * 8 + 120);
+  const codePreviewBuffer = 300;
+  return baseWidth + codePreviewBuffer;
+};
+
 export const useGraphInteractions = (nodes, setNodes, setEdges) => {
   const [highlightedFiles, setHighlightedFiles] = useState(new Set());
 
@@ -56,20 +86,31 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
                 return updatedNodes;
               }
 
-              const positionedNodes = newNodes.map((node, i) => ({
-                ...node,
-                type: "file",
-                position: {
-                  x: sourceX + 350,
-                  y: sourceY + i * 250,
-                },
-                data: {
-                  ...node.data,
-                  onExpandCalls: (...args) => expandCallsRef.current?.(...args),
-                  onSymbolHover: (...args) => symbolHoverRef.current?.(...args),
-                  onExpandFile: (...args) => expandFileRef.current?.(...args),
-                },
-              }));
+              // Calculate positions based on source node and new nodes content
+              const sourceWidth = estimateNodeWidth(sourceNode);
+              const horizontalGap = 60;
+              const verticalGap = 30;
+
+              let currentY = sourceY;
+              const positionedNodes = newNodes.map((node) => {
+                const nodeHeight = estimateNodeHeight(node.data?.symbols);
+                const positioned = {
+                  ...node,
+                  type: "file",
+                  position: {
+                    x: sourceX + sourceWidth + horizontalGap,
+                    y: currentY,
+                  },
+                  data: {
+                    ...node.data,
+                    onExpandCalls: (...args) => expandCallsRef.current?.(...args),
+                    onSymbolHover: (...args) => symbolHoverRef.current?.(...args),
+                    onExpandFile: (...args) => expandFileRef.current?.(...args),
+                  },
+                };
+                currentY += nodeHeight + verticalGap;
+                return positioned;
+              });
 
               return [...updatedNodes, ...positionedNodes];
             });
@@ -114,15 +155,25 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
 
         if (uniqueNewNodes.length === 0) return currentNodes;
 
-        const targetX = sourceX + 300;
-        const nodeHeight = 90;
+        const sourceWidth = estimateNodeWidth(sourceNode);
+        const horizontalGap = 60;
+        const targetX = sourceX + sourceWidth + horizontalGap;
+
+        // Calculate occupied ranges based on actual node heights
         const occupiedRanges = currentNodes
-          .filter((n) => Math.abs(n.position.x - targetX) < 250)
-          .map((n) => ({ top: n.position.y, bottom: n.position.y + 70 }));
+          .filter((n) => Math.abs(n.position.x - targetX) < sourceWidth)
+          .map((n) => {
+            const h = estimateNodeHeight(n.data?.symbols);
+            return { top: n.position.y, bottom: n.position.y + h };
+          });
+
+        // For symbol nodes, use a simpler height estimate
+        const symbolNodeHeight = 80;
+        const verticalGap = 20;
 
         const findFreeY = (startY, count) => {
           let y = startY;
-          const neededHeight = count * nodeHeight;
+          const neededHeight = count * (symbolNodeHeight + verticalGap);
 
           for (let attempts = 0; attempts < 50; attempts++) {
             const proposedTop = y;
@@ -133,7 +184,7 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
             );
 
             if (!hasCollision) return y;
-            y += nodeHeight;
+            y += symbolNodeHeight + verticalGap;
           }
           return y;
         };
@@ -145,7 +196,7 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
           type: node.type || "symbol",
           position: {
             x: targetX,
-            y: startY + index * nodeHeight,
+            y: startY + index * (symbolNodeHeight + verticalGap),
           },
           data: {
             ...node.data,
