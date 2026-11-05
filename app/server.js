@@ -3,22 +3,25 @@ import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { fileURLToPath } from "url";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { spawn } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const ALLOWED_ORIGIN = /^http:\/\/localhost:\d+$/;
+
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: /^http:\/\/localhost:\d+$/,
+    origin: ALLOWED_ORIGIN,
     methods: ["GET", "POST"],
   },
 });
 
 const PORT = process.env.PORT || 0;
+const HOST = "127.0.0.1";
 
 // Store Neovim connection info
 let neovimSocket = null;
@@ -71,8 +74,46 @@ function resolvePendingRequest(requestId, value) {
   }
 }
 
+/**
+ * Quote a value as a Lua string literal, safe for --remote-send key notation.
+ */
+function luaStr(value) {
+  const escaped = String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/</g, "<lt>");
+  return `"${escaped}"`;
+}
+
+/**
+ * Coerce a request value to an integer, or throw.
+ */
+function luaInt(value) {
+  const n = Number(value);
+  if (!Number.isInteger(n)) {
+    throw new Error(`Expected integer, got ${JSON.stringify(value)}`);
+  }
+  return n;
+}
+
+/**
+ * Resolve a path against the registered Neovim cwd; throw if it escapes it.
+ */
+function projectPath(filepath) {
+  if (!neovimCwd) {
+    throw new Error("Neovim not connected");
+  }
+  const full = resolve(neovimCwd, filepath);
+  if (full !== neovimCwd && !full.startsWith(neovimCwd + "/")) {
+    throw new Error("Path outside project");
+  }
+  return full;
+}
+
 // Middleware
-app.use(cors());
+app.use(cors({ origin: ALLOWED_ORIGIN }));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static(join(__dirname, "client/dist")));
 
@@ -111,7 +152,9 @@ app.post("/api/expand", async (req, res) => {
   const { promise, requestId, cleanup } = createPendingRequest("expand", 10000);
 
   try {
-    await sendToNeovim(`require("terreno.lsp").expand_node("${filepath}", ${line}, ${col || 5}, "${requestId}")`);
+    await sendToNeovim(
+      `require("terreno.lsp").expand_node(${luaStr(filepath)}, ${luaInt(line)}, ${luaInt(col || 5)}, ${luaStr(requestId)})`,
+    );
     const result = await promise;
     res.json({ status: "ok", ...result });
   } catch (err) {
@@ -124,7 +167,16 @@ app.post("/api/expand", async (req, res) => {
 // API endpoint to receive expand results from Neovim
 app.post("/api/expand-result", (req, res) => {
   const { request_id, nodes, edges, files } = req.body;
-  console.log("Expand result:", request_id, "nodes:", nodes?.length, "edges:", edges?.length, "files:", files?.length);
+  console.log(
+    "Expand result:",
+    request_id,
+    "nodes:",
+    nodes?.length,
+    "edges:",
+    edges?.length,
+    "files:",
+    files?.length,
+  );
   resolvePendingRequest(request_id, { nodes, edges, files });
   res.json({ status: "ok" });
 });
@@ -137,7 +189,9 @@ app.post("/api/references", async (req, res) => {
   const { promise, requestId, cleanup } = createPendingRequest("refs", 5000);
 
   try {
-    await sendToNeovim(`require("terreno.lsp").find_references("${filepath}", ${line}, "${requestId}")`);
+    await sendToNeovim(
+      `require("terreno.lsp").find_references(${luaStr(filepath)}, ${luaInt(line)}, ${luaStr(requestId)})`,
+    );
     const result = await promise;
     res.json({ status: "ok", files: result.files || [] });
   } catch (err) {
@@ -152,10 +206,15 @@ app.post("/api/expand-file", async (req, res) => {
   const { filepath } = req.body;
   console.log("Expand file request:", filepath);
 
-  const { promise, requestId, cleanup } = createPendingRequest("expandfile", 15000);
+  const { promise, requestId, cleanup } = createPendingRequest(
+    "expandfile",
+    15000,
+  );
 
   try {
-    await sendToNeovim(`require("terreno.lsp").expand_file_imports("${filepath}", "${requestId}")`);
+    await sendToNeovim(
+      `require("terreno.lsp").expand_file_imports(${luaStr(filepath)}, ${luaStr(requestId)})`,
+    );
     const result = await promise;
     res.json({ status: "ok", ...result });
   } catch (err) {
@@ -185,7 +244,9 @@ async function requestSymbols(filepath) {
 
   try {
     console.log("Requesting symbols from Neovim:", filepath);
-    await sendToNeovim(`require("terreno").send_document_symbols("${filepath}", "${requestId}")`);
+    await sendToNeovim(
+      `require("terreno").send_document_symbols(${luaStr(filepath)}, ${luaStr(requestId)})`,
+    );
     return await promise;
   } catch (err) {
     cleanup();
@@ -219,7 +280,12 @@ function sendToNeovim(luaCommand) {
     // Escape the Lua command for shell
     const cmd = `<Cmd>lua ${luaCommand}<CR>`;
 
-    const nvim = spawn("nvim", ["--server", neovimSocket, "--remote-send", cmd]);
+    const nvim = spawn("nvim", [
+      "--server",
+      neovimSocket,
+      "--remote-send",
+      cmd,
+    ]);
 
     let stderr = "";
     nvim.stderr.on("data", (data) => {
@@ -252,7 +318,9 @@ app.post("/api/navigate", async (req, res) => {
       fullPath = join(neovimCwd, filepath);
     }
 
-    await sendToNeovim(`require("terreno").navigate_to("${fullPath}", ${line || 0})`);
+    await sendToNeovim(
+      `require("terreno").navigate_to(${luaStr(fullPath)}, ${luaInt(line || 0)})`,
+    );
     res.json({ status: "ok" });
   } catch (err) {
     console.error("Navigate error:", err.message);
@@ -268,10 +336,7 @@ app.post("/api/code", async (req, res) => {
   try {
     // Read file directly from server
     const fs = await import("fs/promises");
-    let fullPath = filepath;
-    if (!filepath.startsWith("/") && neovimCwd) {
-      fullPath = join(neovimCwd, filepath);
-    }
+    const fullPath = projectPath(filepath);
 
     const content = await fs.readFile(fullPath, "utf-8");
     const lines = content.split("\n");
@@ -319,7 +384,9 @@ io.on("connection", (socket) => {
       if (!filepath.startsWith("/") && neovimCwd) {
         fullPath = join(neovimCwd, filepath);
       }
-      await sendToNeovim(`require("terreno").navigate_to("${fullPath}", ${line || 0})`);
+      await sendToNeovim(
+        `require("terreno").navigate_to(${luaStr(fullPath)}, ${luaInt(line || 0)})`,
+      );
       socket.emit("navigate:success");
     } catch (err) {
       socket.emit("navigate:error", { message: err.message });
@@ -327,68 +394,74 @@ io.on("connection", (socket) => {
   });
 
   // Handle code snippet request
-  socket.on("code:request", async ({ filepath, line, end_line, name, context }, callback) => {
-    console.log("Socket code request:", { filepath, line, end_line, name });
-    try {
-      const fs = await import("fs/promises");
-      let fullPath = filepath;
-      if (!filepath.startsWith("/") && neovimCwd) {
-        fullPath = join(neovimCwd, filepath);
-      }
+  socket.on(
+    "code:request",
+    async ({ filepath, line, end_line, name, context }, callback) => {
+      console.log("Socket code request:", { filepath, line, end_line, name });
+      try {
+        const fs = await import("fs/promises");
+        const fullPath = projectPath(filepath);
 
-      const content = await fs.readFile(fullPath, "utf-8");
-      const lines = content.split("\n");
+        const content = await fs.readFile(fullPath, "utf-8");
+        const lines = content.split("\n");
 
-      let startLine, endLine;
+        let startLine, endLine;
 
-      if (end_line && end_line > line) {
-        // Use the symbol's actual range from LSP
-        startLine = Math.max(0, line - 1);
-        endLine = Math.min(lines.length, end_line);
-      } else {
-        // Need to get the real range from documentSymbols
-        try {
-          const symbols = await requestSymbols(fullPath);
-          const symbol = findSymbolByLine(symbols, line, name);
+        if (end_line && end_line > line) {
+          // Use the symbol's actual range from LSP
+          startLine = Math.max(0, line - 1);
+          endLine = Math.min(lines.length, end_line);
+        } else {
+          // Need to get the real range from documentSymbols
+          try {
+            const symbols = await requestSymbols(fullPath);
+            const symbol = findSymbolByLine(symbols, line, name);
 
-          if (symbol && symbol.end_line && symbol.end_line > symbol.line) {
-            console.log("Found symbol with range:", symbol.name, symbol.line, "-", symbol.end_line);
-            startLine = Math.max(0, symbol.line - 1);
-            endLine = Math.min(lines.length, symbol.end_line);
-          } else {
-            // Fallback to context-based
-            console.log("Symbol not found or no range, using context");
+            if (symbol && symbol.end_line && symbol.end_line > symbol.line) {
+              console.log(
+                "Found symbol with range:",
+                symbol.name,
+                symbol.line,
+                "-",
+                symbol.end_line,
+              );
+              startLine = Math.max(0, symbol.line - 1);
+              endLine = Math.min(lines.length, symbol.end_line);
+            } else {
+              // Fallback to context-based
+              console.log("Symbol not found or no range, using context");
+              const ctx = context || 5;
+              startLine = Math.max(0, line - ctx - 1);
+              endLine = Math.min(lines.length, line + ctx);
+            }
+          } catch (err) {
+            // Timeout or error getting symbols, fallback to context
+            console.log("Error getting symbols:", err.message);
             const ctx = context || 5;
             startLine = Math.max(0, line - ctx - 1);
             endLine = Math.min(lines.length, line + ctx);
           }
-        } catch (err) {
-          // Timeout or error getting symbols, fallback to context
-          console.log("Error getting symbols:", err.message);
-          const ctx = context || 5;
-          startLine = Math.max(0, line - ctx - 1);
-          endLine = Math.min(lines.length, line + ctx);
         }
+
+        const snippet = lines.slice(startLine, endLine).map((text, i) => ({
+          num: startLine + i + 1,
+          text,
+        }));
+
+        callback({ status: "ok", lines: snippet });
+      } catch (err) {
+        callback({ status: "error", message: err.message });
       }
-
-      const snippet = lines.slice(startLine, endLine).map((text, i) => ({
-        num: startLine + i + 1,
-        text,
-      }));
-
-      callback({ status: "ok", lines: snippet });
-    } catch (err) {
-      callback({ status: "error", message: err.message });
-    }
-  });
+    },
+  );
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   const actualPort = server.address().port;
   console.log(`TERRENO_PORT=${actualPort}`);
-  console.log(`Terreno server running at http://localhost:${actualPort}`);
+  console.log(`Terreno server running at http://${HOST}:${actualPort}`);
 });
