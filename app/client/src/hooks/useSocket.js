@@ -1,16 +1,12 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { socket } from "../utils/socket";
 
 export const useSocket = () => {
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(socket.connected);
   const [neovimConnected, setNeovimConnected] = useState(false);
   const [cwd, setCwd] = useState("");
 
   useEffect(() => {
-    if (socket.connected) {
-      setConnected(true);
-    }
-
     const handleConnect = () => {
       console.log("Connected to server");
       setConnected(true);

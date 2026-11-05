@@ -1,19 +1,10 @@
 import Dagre from "@dagrejs/dagre";
 
 /**
- * Estimate node dimensions based on content.
+ * Estimate file node dimensions based on content.
  * These match the CSS styles in App.css for .file-node
  */
-const estimateNodeSize = (node) => {
-  if (node.type !== "file") {
-    // Legacy symbol nodes
-    const labelLength = node.data?.label?.length || 10;
-    return {
-      width: Math.max(180, labelLength * 8 + 80),
-      height: 70,
-    };
-  }
-
+export const estimateNodeSize = (node) => {
   const symbols = node.data?.symbols || [];
 
   // Width: based on longest symbol name or filename
@@ -44,17 +35,14 @@ const estimateNodeSize = (node) => {
 /**
  * Grid layout for initial view with no edges
  */
-export const getGridLayout = (nodes) => {
-  const fileNodes = nodes.filter((n) => n.type === "file");
-
-  if (fileNodes.length === 0) return nodes;
+const getGridLayout = (nodes) => {
+  if (nodes.length === 0) return nodes;
 
   // Calculate max width to use as column spacing
-  const sizes = fileNodes.map((n) => estimateNodeSize(n));
-  const maxWidth = Math.max(...sizes.map((s) => s.width));
+  const maxWidth = Math.max(...nodes.map((n) => estimateNodeSize(n).width));
   const gap = 40;
 
-  return fileNodes.map((node, index) => ({
+  return nodes.map((node, index) => ({
     ...node,
     position: { x: index * (maxWidth + gap), y: 0 },
   }));
@@ -87,8 +75,7 @@ export const getLayoutedElements = (nodes, edges, direction = "LR") => {
   });
 
   nodes.forEach((node) => {
-    const size = nodeSizes.get(node.id);
-    g.setNode(node.id, size);
+    g.setNode(node.id, nodeSizes.get(node.id));
   });
 
   edges.forEach((edge) => {

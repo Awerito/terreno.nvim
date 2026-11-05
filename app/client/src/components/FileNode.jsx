@@ -80,7 +80,7 @@ const FileNode = memo(({ data, id }) => {
       e.stopPropagation();
       setExpanded(!expanded);
     },
-    [expanded]
+    [expanded],
   );
 
   const handleExpandFile = useCallback(
@@ -96,7 +96,7 @@ const FileNode = memo(({ data, id }) => {
       }
       setExpandingFile(false);
     },
-    [data, id, expandingFile]
+    [data, id, expandingFile],
   );
 
   const handleSymbolClick = useCallback(
@@ -118,7 +118,6 @@ const FileNode = memo(({ data, id }) => {
           filepath: data.filepath,
           line: sym.line,
           end_line: sym.end_line,
-          name: sym.name,
           context: 2,
         },
         (response) => {
@@ -126,10 +125,10 @@ const FileNode = memo(({ data, id }) => {
           if (response.status === "ok") {
             setCodeLines(response.lines);
           }
-        }
+        },
       );
     },
-    [data.filepath, expandedSymbol]
+    [data.filepath, expandedSymbol],
   );
 
   const handleSymbolDoubleClick = useCallback(
@@ -137,7 +136,7 @@ const FileNode = memo(({ data, id }) => {
       e.stopPropagation();
       handleNavigate(data.filepath, sym.line);
     },
-    [data.filepath, handleNavigate]
+    [data.filepath, handleNavigate],
   );
 
   const handleSymbolHover = useCallback(
@@ -146,7 +145,7 @@ const FileNode = memo(({ data, id }) => {
         data.onSymbolHover(id, sym, entering);
       }
     },
-    [id, data]
+    [id, data],
   );
 
   const groupedSymbols = useMemo(() => {
@@ -178,7 +177,10 @@ const FileNode = memo(({ data, id }) => {
       </div>
 
       {expandedSymbol === sym.name && (
-        <div className="symbol-code-preview" onWheel={(e) => e.stopPropagation()}>
+        <div
+          className="symbol-code-preview"
+          onWheel={(e) => e.stopPropagation()}
+        >
           {loadingCode ? (
             <div className="code-loading">Loading...</div>
           ) : (
@@ -187,7 +189,12 @@ const FileNode = memo(({ data, id }) => {
               style={customTheme}
               showLineNumbers
               startingLineNumber={codeLines[0]?.num || 1}
-              lineNumberStyle={{ minWidth: "2.5em", paddingRight: "1em", color: "#475569", background: "none" }}
+              lineNumberStyle={{
+                minWidth: "2.5em",
+                paddingRight: "1em",
+                color: "#475569",
+                background: "none",
+              }}
               lineNumberContainerStyle={{ background: "none" }}
               customStyle={{
                 margin: 0,
@@ -211,7 +218,9 @@ const FileNode = memo(({ data, id }) => {
   );
 
   return (
-    <div className={`file-node no-wheel-zoom ${data.highlighted ? "highlighted" : ""}`}>
+    <div
+      className={`file-node no-wheel-zoom ${data.highlighted ? "highlighted" : ""}`}
+    >
       <Handle type="target" position={Position.Left} />
 
       <div className="file-header" onClick={handleToggle}>
@@ -254,7 +263,7 @@ const FileNode = memo(({ data, id }) => {
                 </div>
                 {groupedSymbols[kind].map((sym, i) => renderSymbol(sym, i))}
               </div>
-            ) : null
+            ) : null,
           )}
           {Object.keys(groupedSymbols)
             .filter((k) => !KIND_ORDER.includes(k))

@@ -22,7 +22,7 @@ Visualize your codebase structure in the browser. Navigate code relationships in
 ```lua
 {
   "Awerito/terreno.nvim",
-  build = ":call terreno#util#install()",
+  build = "cd app && ./install.sh",
   config = function()
     require("terreno").setup()
   end,
@@ -32,9 +32,7 @@ Visualize your codebase structure in the browser. Navigate code relationships in
 ## Usage
 
 ```vim
-:Terreno workspace       " Visualize workspace file structure
-:Terreno buffer          " Visualize current buffer symbols
-:Terreno calls           " Visualize call hierarchy from cursor
+:Terreno workspace       " Visualize current file and the files it imports
 ```
 
 ## How it works

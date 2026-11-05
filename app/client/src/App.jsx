@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,8 +11,10 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./App.css";
 
-import { FileNode, StatusBar } from "./components";
-import { useSocket, useGraphEvents, useGraphInteractions } from "./hooks";
+import FileNode from "./components/FileNode";
+import StatusBar from "./components/StatusBar";
+import { useSocket, useGraphEvents } from "./hooks/useSocket";
+import { useGraphInteractions } from "./hooks/useGraphInteractions";
 import { getLayoutedElements } from "./utils/layout";
 
 // Node types for ReactFlow
@@ -48,7 +50,7 @@ function App() {
   const { highlightedFiles, refs } = useGraphInteractions(
     nodes,
     setNodes,
-    setEdges
+    setEdges,
   );
 
   // Handle incoming graph data
@@ -62,16 +64,13 @@ function App() {
         position: node.position || { x: 0, y: 0 },
         data: {
           ...node.data,
-          onExpandCalls: (...args) => refs.expandCallsRef.current?.(...args),
           onSymbolHover: (...args) => refs.symbolHoverRef.current?.(...args),
           onExpandFile: (...args) => refs.expandFileRef.current?.(...args),
         },
       }));
 
-      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-        typedNodes,
-        data.edges || []
-      );
+      const { nodes: layoutedNodes, edges: layoutedEdges } =
+        getLayoutedElements(typedNodes, data.edges || []);
 
       setNodes(layoutedNodes);
       setEdges(layoutedEdges);
@@ -79,7 +78,7 @@ function App() {
       // Auto-center after first load
       setTimeout(() => fitView({ padding: 0.1 }), 50);
     },
-    [setNodes, setEdges, refs, fitView]
+    [setNodes, setEdges, refs, fitView],
   );
 
   // Subscribe to graph data events
@@ -90,7 +89,8 @@ function App() {
     return edges.map((edge) => {
       const isHighlighted =
         highlightedFiles.size > 0 &&
-        (highlightedFiles.has(edge.source) || highlightedFiles.has(edge.target));
+        (highlightedFiles.has(edge.source) ||
+          highlightedFiles.has(edge.target));
       return {
         ...edge,
         style: isHighlighted

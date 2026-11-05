@@ -1,40 +1,10 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { fetchReferences, fetchExpandFile } from "../utils/socket";
-
-/**
- * Estimate node height based on symbol count
- */
-const estimateNodeHeight = (symbols = []) => {
-  const headerHeight = 50;
-  const symbolHeight = 28;
-  const groupHeaderHeight = 24;
-  const groupCount = new Set(symbols.map((s) => s.kind)).size;
-  const symbolsHeight = symbols.length * symbolHeight + groupCount * groupHeaderHeight;
-  const maxSymbolsHeight = 300;
-  return headerHeight + Math.min(symbolsHeight, maxSymbolsHeight) + 16;
-};
-
-/**
- * Estimate node width based on content
- * Includes buffer for expanded code preview
- */
-const estimateNodeWidth = (node) => {
-  const filename = node.data?.filename || "";
-  const symbols = node.data?.symbols || [];
-  const longestSymbol = symbols.reduce(
-    (max, s) => Math.max(max, s.name?.length || 0),
-    0
-  );
-  const maxTextLength = Math.max(filename.length, longestSymbol);
-  const baseWidth = Math.max(280, maxTextLength * 8 + 120);
-  const codePreviewBuffer = 300;
-  return baseWidth + codePreviewBuffer;
-};
+import { estimateNodeSize } from "../utils/layout";
 
 export const useGraphInteractions = (nodes, setNodes, setEdges) => {
   const [highlightedFiles, setHighlightedFiles] = useState(new Set());
 
-  const expandCallsRef = useRef(null);
   const symbolHoverRef = useRef(null);
   const expandFileRef = useRef(null);
 
@@ -59,7 +29,7 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
           console.error("References error:", err);
         });
     },
-    [nodes]
+    [nodes],
   );
 
   // Handle expanding a file's imports
@@ -72,7 +42,7 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
               const updatedNodes = currentNodes.map((n) =>
                 n.id === sourceId
                   ? { ...n, data: { ...n.data, isExpanded: true } }
-                  : n
+                  : n,
               );
 
               const sourceNode = currentNodes.find((n) => n.id === sourceId);
@@ -80,20 +50,21 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
               const sourceY = sourceNode?.position?.y || 0;
 
               const existingIds = new Set(currentNodes.map((n) => n.id));
-              const newNodes = result.nodes.filter((n) => !existingIds.has(n.id));
+              const newNodes = result.nodes.filter(
+                (n) => !existingIds.has(n.id),
+              );
 
               if (newNodes.length === 0) {
                 return updatedNodes;
               }
 
-              // Calculate positions based on source node and new nodes content
-              const sourceWidth = estimateNodeWidth(sourceNode);
+              // Stack new nodes to the right of the source node
+              const sourceWidth = estimateNodeSize(sourceNode).width;
               const horizontalGap = 60;
               const verticalGap = 30;
 
               let currentY = sourceY;
               const positionedNodes = newNodes.map((node) => {
-                const nodeHeight = estimateNodeHeight(node.data?.symbols);
                 const positioned = {
                   ...node,
                   type: "file",
@@ -103,12 +74,12 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
                   },
                   data: {
                     ...node.data,
-                    onExpandCalls: (...args) => expandCallsRef.current?.(...args),
-                    onSymbolHover: (...args) => symbolHoverRef.current?.(...args),
+                    onSymbolHover: (...args) =>
+                      symbolHoverRef.current?.(...args),
                     onExpandFile: (...args) => expandFileRef.current?.(...args),
                   },
                 };
-                currentY += nodeHeight + verticalGap;
+                currentY += estimateNodeSize(node).height + verticalGap;
                 return positioned;
               });
 
@@ -126,8 +97,8 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
                 .filter(
                   (e) =>
                     !currentEdges.some(
-                      (ce) => ce.source === e.source && ce.target === e.target
-                    )
+                      (ce) => ce.source === e.source && ce.target === e.target,
+                    ),
                 );
               return [...currentEdges, ...newEdges];
             });
@@ -137,99 +108,17 @@ export const useGraphInteractions = (nodes, setNodes, setEdges) => {
           console.error("Expand file error:", err);
         });
     },
-    [setNodes, setEdges]
+    [setNodes, setEdges],
   );
 
-  // Handle expanding a node's outgoing calls (legacy)
-  const handleExpandCalls = useCallback(
-    (sourceId, newNodes, newEdges) => {
-      console.log("Expanding calls:", sourceId, newNodes.length, "nodes");
-
-      setNodes((currentNodes) => {
-        const sourceNode = currentNodes.find((n) => n.id === sourceId);
-        const sourceX = sourceNode?.position?.x || 0;
-        const sourceY = sourceNode?.position?.y || 0;
-
-        const existingIds = new Set(currentNodes.map((n) => n.id));
-        const uniqueNewNodes = newNodes.filter((n) => !existingIds.has(n.id));
-
-        if (uniqueNewNodes.length === 0) return currentNodes;
-
-        const sourceWidth = estimateNodeWidth(sourceNode);
-        const horizontalGap = 60;
-        const targetX = sourceX + sourceWidth + horizontalGap;
-
-        // Calculate occupied ranges based on actual node heights
-        const occupiedRanges = currentNodes
-          .filter((n) => Math.abs(n.position.x - targetX) < sourceWidth)
-          .map((n) => {
-            const h = estimateNodeHeight(n.data?.symbols);
-            return { top: n.position.y, bottom: n.position.y + h };
-          });
-
-        // For symbol nodes, use a simpler height estimate
-        const symbolNodeHeight = 80;
-        const verticalGap = 20;
-
-        const findFreeY = (startY, count) => {
-          let y = startY;
-          const neededHeight = count * (symbolNodeHeight + verticalGap);
-
-          for (let attempts = 0; attempts < 50; attempts++) {
-            const proposedTop = y;
-            const proposedBottom = y + neededHeight;
-
-            const hasCollision = occupiedRanges.some(
-              (r) => !(proposedBottom < r.top || proposedTop > r.bottom)
-            );
-
-            if (!hasCollision) return y;
-            y += symbolNodeHeight + verticalGap;
-          }
-          return y;
-        };
-
-        const startY = findFreeY(sourceY, uniqueNewNodes.length);
-
-        const typedNewNodes = uniqueNewNodes.map((node, index) => ({
-          ...node,
-          type: node.type || "symbol",
-          position: {
-            x: targetX,
-            y: startY + index * (symbolNodeHeight + verticalGap),
-          },
-          data: {
-            ...node.data,
-            onExpandCalls: (...args) => expandCallsRef.current?.(...args),
-          },
-        }));
-
-        return [...currentNodes, ...typedNewNodes];
-      });
-
-      setEdges((currentEdges) => {
-        const existingEdgeIds = new Set(
-          currentEdges.map((e) => `${e.source}-${e.target}`)
-        );
-        const uniqueNewEdges = newEdges.filter(
-          (e) => !existingEdgeIds.has(`${e.source}-${e.target}`)
-        );
-        return [...currentEdges, ...uniqueNewEdges];
-      });
-    },
-    [setNodes, setEdges]
-  );
-
-  // Update refs
-  expandCallsRef.current = handleExpandCalls;
-  symbolHoverRef.current = handleSymbolHover;
-  expandFileRef.current = handleExpandFile;
+  // Keep refs pointing at the latest handlers (node data holds stable wrappers)
+  useEffect(() => {
+    symbolHoverRef.current = handleSymbolHover;
+    expandFileRef.current = handleExpandFile;
+  });
 
   return {
     highlightedFiles,
-    handleSymbolHover,
-    handleExpandFile,
-    handleExpandCalls,
-    refs: { expandCallsRef, symbolHoverRef, expandFileRef },
+    refs: { symbolHoverRef, expandFileRef },
   };
 };
